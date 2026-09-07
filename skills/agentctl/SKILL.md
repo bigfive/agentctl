@@ -88,66 +88,40 @@ settings unprompted.
 
 ### If you are Cursor
 
-**Which kind of Cursor session are you in? This decides everything.**
-
-Cursor keeps two separate transcripts for a chat id: the CLI's own, and the
-IDE's. Resuming an IDE chat from the command line does **not** join the
-conversation on the user's screen — it writes a separate transcript that the
-IDE never shows. This is measured behaviour, not a guess.
-
-So:
-
-- **Cursor in the IDE** (the sidebar or a chat pane): you **cannot** be
-  notified. Use the blocking wait instead, below.
-- **Cursor CLI** (`cursor-agent` in a terminal): `asyncwait` works.
-
-#### In the IDE: block on the wait
+**Use the blocking wait. Do not try to be notified.**
 
 ```bash
 agentctl wait "$a"
 ```
 
-This blocks until the child is done and prints the completion envelope
-straight back to you. Run it as a background command if your tooling supports
-being notified when a background command finishes; otherwise let it block and
-report the result when it returns. Several at once:
+This blocks until the child is done, then prints the completion envelope
+straight back to you. Several at once:
 
 ```bash
 agentctl wait "$a" "$b"
 ```
 
-Exit codes: `0` succeeded, `70` the child failed, `71` cancelled.
+Exit codes: `0` succeeded, `70` the child failed, `71` cancelled. Run it as a
+background command if your tooling tells you when a background command
+finishes; otherwise let it block and report the result when it returns.
 
-Do not tell the user their answer will arrive later in the chat. It will not.
+Never tell the user their answer will arrive in the chat later. In the Cursor
+IDE it will not: Cursor keeps separate CLI and IDE transcripts for one chat id,
+so a completion sent from the command line lands in a transcript the IDE never
+displays. That is measured behaviour, and `agentctl` refuses such a target
+rather than reporting a delivery nobody will see.
 
-#### In the CLI: register the wait
-
-Find your chat id under `~/.cursor/chats/<workspace-hash>/<chat-id>/`:
-
-```bash
-ls -td ~/.cursor/chats/*/*/ | head -1
-```
-
-Confirm it is yours by checking `meta.json` `cwd` matches your working
-directory:
-
-```bash
-cat "$(ls -td ~/.cursor/chats/*/*/ | head -1)meta.json"
-```
-
-An id starting with `bc-` is a Cursor cloud agent and is not supported.
+Push delivery does work from `cursor-agent` in a terminal. Only reach for it if
+you are certain that is where you are running:
 
 ```bash
 agentctl asyncwait "$a" --notify cursor:<your-chat-id>
 ```
 
-If this fails with exit `67` saying the target is an IDE chat, you are in the
-IDE: use the blocking wait above. agentctl refuses rather than reporting a
-delivery that would never be seen.
-
-Cursor has no message queue. Delivering into a CLI chat that already has a turn
-running is accepted, not refused, so a completion can land beside your current
-work rather than after it.
+Your chat id is the last path segment under `~/.cursor/chats/<hash>/`, and
+`meta.json` there shows which working directory it belongs to. An id starting
+with `bc-` is a cloud agent and is not supported. If this returns exit `67`,
+you are in the IDE — go back to `agentctl wait`.
 
 ### If you are OpenCode
 
