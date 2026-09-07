@@ -39,6 +39,22 @@ pick_bindir() {
 
 # Where each harness reads user-level skills from. A harness is treated as
 # present when its parent directory already exists.
+#
+# These directories are not private to one harness. Measured on the installed
+# versions:
+#
+#   codex     reads ~/.codex/skills and ~/.agents/skills
+#   claude    reads ~/.claude/skills
+#   cursor    reads ~/.cursor/skills
+#   opencode  reads ~/.config/opencode/skills, ~/.claude/skills, ~/.agents/skills
+#
+# So a harness can pick up a skill installed for another one. There is a single
+# skill, written to route by harness, and every install below is a symlink to
+# that same file. A harness that sees it twice therefore sees one set of
+# instructions, never two conflicting ones.
+#
+# ~/.agents/skills is deliberately not used: it would add a second copy for
+# both Codex and OpenCode without reaching any harness the list below misses.
 skill_dir() {
     case "$1" in
         claude) echo "$HOME/.claude/skills" ;;
@@ -97,7 +113,7 @@ if [ "$DO_SKILLS" = yes ]; then
         fi
         dir=$(skill_dir "$harness")
         mkdir -p "$dir"
-        ln -sfn "$ROOT/skills/$harness" "$dir/$NAME"
+        ln -sfn "$ROOT/skills/$NAME" "$dir/$NAME"
         echo "installed $dir/$NAME"
         installed=$((installed + 1))
     done

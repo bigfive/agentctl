@@ -109,25 +109,37 @@ interface is unavailable, the command fails and says so.
 
 ## Teaching each harness to use it
 
-Each harness gets a skill, installed by `install.sh` into the directory that
-harness reads. The skill is what makes an agent reach for `agentctl` on its
-own, and it carries the one thing that genuinely differs per harness: how an
-agent finds **its own** session id in order to be notified.
+There is **one** skill, `skills/agentctl/SKILL.md`, and `install.sh` links it
+into every harness it finds. The skill routes by harness internally: an agent
+reads only the section for the harness it is running in.
 
-| Harness | Skill | Installed to |
-|---|---|---|
-| Codex | [skills/codex](skills/codex/SKILL.md) | `~/.codex/skills/agentctl/` |
-| Claude Code | [skills/claude](skills/claude/SKILL.md) | `~/.claude/skills/agentctl/` |
-| Cursor | [skills/cursor](skills/cursor/SKILL.md) | `~/.cursor/skills/agentctl/` |
-| OpenCode | [skills/opencode](skills/opencode/SKILL.md) | `~/.config/opencode/skills/agentctl/` |
+One skill rather than four is a requirement, not a preference, because these
+directories are not private to one harness. Measured on the installed
+versions:
+
+| Harness | Reads skills from |
+|---|---|
+| Codex | `~/.codex/skills`, `~/.agents/skills` |
+| Claude Code | `~/.claude/skills` |
+| Cursor | `~/.cursor/skills` |
+| OpenCode | `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` |
+
+With a separate skill per harness, OpenCode would load both its own and
+Claude's — two skills with the same name, one of them telling it to use a wake
+mechanism that only exists in Claude. A single skill makes that impossible:
+every install is a symlink to the same file, so a harness that finds it twice
+finds one set of instructions.
+
+OpenCode logs `duplicate skill name` when it sees it in two of its scan paths,
+and resolves to a single skill. The warning is harmless here precisely because
+both paths lead to the same file. `~/.agents/skills` is deliberately left
+alone: it would add another copy for Codex and OpenCode without reaching any
+harness the list above misses.
 
 All four harnesses use the same skill format — a directory holding `SKILL.md`
-with `name` and `description` frontmatter — so the four skills differ only in
-content, not in shape. OpenCode also scans `~/.claude/skills` by default, so it
-may see the Claude skill as well; its own skill is the one written for it.
-
-Read them directly if you want the per-harness detail: they are plain
-markdown, and they are the only copy of these instructions.
+with `name` and `description` frontmatter — so one file genuinely serves all of
+them. Note that `~/.cursor/skills-cursor/` is reserved for Cursor's own
+built-ins and is never written to.
 
 ## What this does not do
 
