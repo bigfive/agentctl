@@ -53,6 +53,17 @@ So if your chat already has a turn in flight when the child finishes:
 Check for that case with `agentctl status <job>`, which shows every wait and its
 delivery state.
 
+## Which cursor binary is used
+
+Cursor's CLI answers to two command names. Its own installer creates both
+`cursor-agent` and `agent`; the Homebrew cask links only `cursor-agent`.
+agentctl tries `cursor-agent` first and falls back to `agent`, preferring the
+specific name because `agent` is generic enough to belong to something else.
+`AGENTCTL_CURSOR_BIN` overrides the lookup.
+
+Having two installs at once is easy to do, and `PATH` order decides which one
+wins, not recency. Check with `cursor-agent --version` and `agent --version`.
+
 ## Cursor as the child
 
 agentctl allocates the child's chat id first with `cursor-agent create-chat`,

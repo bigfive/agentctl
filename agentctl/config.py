@@ -19,15 +19,22 @@ EXTRA_BINARY_PATHS = {
         os.path.expanduser("~/.codex/bin/codex"),
     ),
     "claude": (os.path.expanduser("~/.local/bin/claude"),),
-    "cursor": (os.path.expanduser("~/.local/bin/cursor-agent"),),
+    "cursor": (
+        os.path.expanduser("~/.local/bin/cursor-agent"),
+        os.path.expanduser("~/.local/bin/agent"),
+    ),
     "opencode": (os.path.expanduser("~/.opencode/bin/opencode"),),
 }
 
+# Candidate command names per harness, most specific first. Cursor's CLI is
+# installed as both `cursor-agent` and `agent` by its own installer, while the
+# Homebrew cask links only `cursor-agent`. The specific name is preferred
+# because `agent` is generic enough to belong to something else entirely.
 BINARY_NAMES = {
-    "codex": "codex",
-    "claude": "claude",
-    "cursor": "cursor-agent",
-    "opencode": "opencode",
+    "codex": ("codex",),
+    "claude": ("claude",),
+    "cursor": ("cursor-agent", "agent"),
+    "opencode": ("opencode",),
 }
 
 ENV_OVERRIDES = {
@@ -97,16 +104,18 @@ def resolve_binary(harness):
             )
         return override
 
-    found = shutil.which(BINARY_NAMES[harness])
-    if found:
-        return found
+    for name in BINARY_NAMES[harness]:
+        found = shutil.which(name)
+        if found:
+            return found
 
     for candidate in EXTRA_BINARY_PATHS.get(harness, ()):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
 
     raise PrerequisiteMissingError(
-        "cannot find the %s binary (%s)" % (harness, BINARY_NAMES[harness]),
+        "cannot find the %s binary (tried %s)"
+        % (harness, ", ".join(BINARY_NAMES[harness])),
         hint="put it on PATH or set %s to its absolute path"
         % ENV_OVERRIDES[harness],
     )
