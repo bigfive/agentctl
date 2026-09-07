@@ -88,32 +88,66 @@ settings unprompted.
 
 ### If you are Cursor
 
-Find your chat id. Chats live in `~/.cursor/chats/<workspace-hash>/<chat-id>/`:
+**Which kind of Cursor session are you in? This decides everything.**
+
+Cursor keeps two separate transcripts for a chat id: the CLI's own, and the
+IDE's. Resuming an IDE chat from the command line does **not** join the
+conversation on the user's screen — it writes a separate transcript that the
+IDE never shows. This is measured behaviour, not a guess.
+
+So:
+
+- **Cursor in the IDE** (the sidebar or a chat pane): you **cannot** be
+  notified. Use the blocking wait instead, below.
+- **Cursor CLI** (`cursor-agent` in a terminal): `asyncwait` works.
+
+#### In the IDE: block on the wait
+
+```bash
+agentctl wait "$a"
+```
+
+This blocks until the child is done and prints the completion envelope
+straight back to you. Run it as a background command if your tooling supports
+being notified when a background command finishes; otherwise let it block and
+report the result when it returns. Several at once:
+
+```bash
+agentctl wait "$a" "$b"
+```
+
+Exit codes: `0` succeeded, `70` the child failed, `71` cancelled.
+
+Do not tell the user their answer will arrive later in the chat. It will not.
+
+#### In the CLI: register the wait
+
+Find your chat id under `~/.cursor/chats/<workspace-hash>/<chat-id>/`:
 
 ```bash
 ls -td ~/.cursor/chats/*/*/ | head -1
 ```
 
-Confirm it is yours by checking its `meta.json` `cwd` matches your working
+Confirm it is yours by checking `meta.json` `cwd` matches your working
 directory:
 
 ```bash
 cat "$(ls -td ~/.cursor/chats/*/*/ | head -1)meta.json"
 ```
 
-A bare UUID is a local chat. An id starting with `bc-` is a Cursor cloud
-agent, which is **not supported** and is rejected rather than silently tried.
+An id starting with `bc-` is a Cursor cloud agent and is not supported.
 
 ```bash
 agentctl asyncwait "$a" --notify cursor:<your-chat-id>
 ```
 
-Cursor has no message queue. Measured behaviour: delivering into a chat that
-already has a turn running is *accepted*, not refused — both turns run and both
-land in the chat. So if you are mid-turn when a child finishes, the completion
-arrives **beside** your current work rather than after it. Whether it surfaces
-in a Cursor window the user is watching has not been tested; do not promise
-that it will.
+If this fails with exit `67` saying the target is an IDE chat, you are in the
+IDE: use the blocking wait above. agentctl refuses rather than reporting a
+delivery that would never be seen.
+
+Cursor has no message queue. Delivering into a CLI chat that already has a turn
+running is accepted, not refused, so a completion can land beside your current
+work rather than after it.
 
 ### If you are OpenCode
 

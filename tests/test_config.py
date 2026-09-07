@@ -108,3 +108,40 @@ class TestLauncher(unittest.TestCase):
         process = subprocess.run([second, "--version"], stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, cwd="/", timeout=60)
         self.assertEqual(process.returncode, 0, process.stderr.decode())
+
+
+class TestCursorIdeChats(unittest.TestCase):
+    """An IDE chat cannot receive a delivery, so it must be refused."""
+
+    def setUp(self):
+        from agentctl.notify import cursor as cursor_notify
+        self.module = cursor_notify
+        self.dir = tempfile.mkdtemp(prefix="agentctl-ide-")
+        self.saved = cursor_notify.IDE_STORE
+        cursor_notify.IDE_STORE = self.dir
+
+    def tearDown(self):
+        self.module.IDE_STORE = self.saved
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_ide_chat_is_refused_at_registration(self):
+        from agentctl import notify
+        from agentctl.errors import UnsupportedOperationError
+        chat = "33b8f260-b104-4342-9219-78ffd819ccce"
+        os.makedirs(os.path.join(self.dir, chat))
+        with self.assertRaises(UnsupportedOperationError) as caught:
+            notify.parse_target("cursor:%s" % chat)
+        self.assertIn("IDE chat", caught.exception.message)
+        self.assertIn("agentctl wait", caught.exception.hint)
+
+    def test_cli_chat_is_accepted(self):
+        from agentctl import notify
+        chat = "440e4817-0e1d-4cd2-a948-d2d59b121ae0"
+        self.assertEqual(notify.parse_target("cursor:%s" % chat),
+                         ("cursor", chat))
+
+    def test_cloud_agent_is_still_refused(self):
+        from agentctl import notify
+        from agentctl.errors import UnsupportedOperationError
+        with self.assertRaises(UnsupportedOperationError):
+            notify.parse_target("cursor:bc-b8651c1b-38d5-4991-aa13-9aae3aa228ae")

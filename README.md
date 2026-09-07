@@ -101,7 +101,7 @@ unbounded transcript.
 |---|---|---|
 | codex | `codex exec --json` | `codex queue --thread` — a durable queue, delivered when the thread goes idle |
 | claude | `claude -p --output-format stream-json` | none; Claude's own wake, via `agentctl wait` or an `asyncRewake` hook |
-| cursor | `cursor-agent -p` on a chat from `create-chat` | `cursor-agent -p --resume` — no queue, so a completion can land beside a turn already running |
+| cursor | `cursor-agent -p` on a chat from `create-chat` | `cursor-agent -p --resume` — CLI chats only; an IDE chat is refused, because the IDE never shows a CLI-delivered turn |
 | opencode | `opencode run --attach` on a pre-created session | `POST /session/<id>/prompt_async` on the running server |
 
 One path per harness. There is no fallback between transports: if the chosen
@@ -140,6 +140,21 @@ All four harnesses use the same skill format — a directory holding `SKILL.md`
 with `name` and `description` frontmatter — so one file genuinely serves all of
 them. Note that `~/.cursor/skills-cursor/` is reserved for Cursor's own
 built-ins and is never written to.
+
+## Cursor: the IDE cannot be notified
+
+Cursor keeps two transcripts for one chat id — the CLI's, under
+`~/.cursor/chats`, and the IDE's. Resuming an IDE chat from the command line
+writes a separate CLI-side transcript that the IDE never displays.
+
+This was measured. A completion delivered to a live Cursor IDE chat reported
+success, a Cursor agent picked it up and answered it, and nothing appeared on
+the user's screen.
+
+So agentctl refuses that target at registration time rather than reporting a
+delivery nobody will see. From a Cursor IDE session, block on
+`agentctl wait <job>` instead, which returns the result directly. The
+`asyncwait` path works from `cursor-agent` in a terminal.
 
 ## What this does not do
 
