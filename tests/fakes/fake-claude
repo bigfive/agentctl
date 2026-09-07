@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Stand-in for the claude binary, emitting claude-shaped stream-json."""
+import json, os, sys, time
+
+args = sys.argv[1:]
+session = "00000000-0000-4000-8000-000000000000"
+for flag in ("--session-id", "--resume"):
+    if flag in args:
+        session = args[args.index(flag) + 1]
+
+prompt = sys.stdin.read()
+print(json.dumps({"type": "system", "subtype": "init",
+                  "session_id": session}), flush=True)
+
+delay = float(os.environ.get("FAKE_DELAY", "0"))
+if delay:
+    time.sleep(delay)
+
+if "FAIL" in prompt:
+    print(json.dumps({"type": "result", "subtype": "error_during_execution",
+                      "is_error": True, "session_id": session,
+                      "result": "fake failure"}), flush=True)
+    sys.exit(1)
+
+if "HANG" in prompt:
+    while True:
+        time.sleep(0.2)
+
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "session_id": session,
+                  "result": "handled: %s" % prompt.strip()}), flush=True)

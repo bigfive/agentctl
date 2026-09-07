@@ -1,0 +1,4 @@
+#!/bin/sh
+# agentctl launcher. Keeps the package importable without installation.
+here=$(cd "$(dirname "$0")/.." && pwd)
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "${AGENTCTL_PYTHON:-python3}" -m agentctl "$@"

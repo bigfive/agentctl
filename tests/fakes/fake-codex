@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Stand-in for the codex binary: supports 'queue' and 'exec'."""
+import json, os, sys, uuid
+
+args = sys.argv[1:]
+record = os.environ.get("FAKE_CODEX_QUEUE_LOG", "/tmp/fake-codex-queue.log")
+
+if args and args[0] == "queue":
+    thread = args[args.index("--thread") + 1]
+    message = args[args.index("--message") + 1]
+    if os.environ.get("FAKE_CODEX_QUEUE_FAIL"):
+        sys.stderr.write("thread not found\n")
+        sys.exit(1)
+    with open(record, "a") as handle:
+        handle.write(json.dumps({"thread": thread, "message": message}) + "\n")
+    print("Queued message %s" % uuid.uuid4())
+    sys.exit(0)
+
+if args and args[0] == "exec":
+    thread_id = str(uuid.uuid4())
+    out = None
+    if "-o" in args:
+        out = args[args.index("-o") + 1]
+    prompt = sys.stdin.read()
+    print(json.dumps({"type": "thread.started", "thread_id": thread_id}),
+          flush=True)
+    print(json.dumps({"type": "turn.started"}), flush=True)
+    if "FAIL" in prompt:
+        print(json.dumps({"type": "turn.failed",
+                          "error": {"message": "out of credits"}}), flush=True)
+        sys.exit(1)
+    if out:
+        with open(out, "w") as handle:
+            handle.write("codex handled: %s" % prompt.strip())
+    print(json.dumps({"type": "turn.completed"}), flush=True)
+    sys.exit(0)
+
+sys.stderr.write("fake-codex: unsupported args %r\n" % args)
+sys.exit(2)
