@@ -283,9 +283,15 @@ class Daemon(object):
             % (notification_id, job_id, harness, target_id))
 
     def register_wait(self, job_id, raw_target):
-        """Register a durable wait, then deliver at once if already terminal."""
+        """Register a durable wait, then deliver at once if already terminal.
+
+        The target is checked for reachability before the wait is stored. A
+        target that cannot receive a delivery fails here, while the calling
+        agent is still watching, instead of silently much later.
+        """
         harness, target_id = notify.parse_target(raw_target)
         record = store.read(job_id)
+        notify.get(harness).preflight(target_id)
         wait = store.add_wait(job_id, harness, target_id, raw_target)
         if store.is_terminal(record):
             self._deliver_all(job_id)

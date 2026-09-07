@@ -102,7 +102,7 @@ unbounded transcript.
 | codex | `codex exec --json` | `codex queue --thread` — a durable queue, delivered when the thread goes idle |
 | claude | `claude -p --output-format stream-json` | none; Claude's own wake, via `agentctl wait` or an `asyncRewake` hook |
 | cursor | `cursor-agent -p` on a chat from `create-chat` | `cursor-agent -p --resume` — CLI chats only; an IDE chat is refused, because the IDE never shows a CLI-delivered turn |
-| opencode | `opencode run --attach` on a pre-created session | `POST /session/<id>/prompt_async` on the running server |
+| opencode | `opencode run --attach` on a pre-created session | `POST /session/<id>/prompt_async` — needs a reachable server, which a TUI without `--port` does not provide |
 
 One path per harness. There is no fallback between transports: if the chosen
 interface is unavailable, the command fails and says so.
@@ -140,6 +140,27 @@ All four harnesses use the same skill format — a directory holding `SKILL.md`
 with `name` and `description` frontmatter — so one file genuinely serves all of
 them. Note that `~/.cursor/skills-cursor/` is reserved for Cursor's own
 built-ins and is never written to.
+
+## A target is checked when the wait is registered
+
+`asyncwait` verifies that the notification target could actually receive a
+delivery, before storing the wait. An unreachable target fails there, with the
+agent still watching, rather than at delivery time where only the job record
+would show it.
+
+That matters because the alternative is the worst failure this tool can
+produce: `asyncwait` returns `exit 0`, the agent tells the user an answer is
+coming, and nothing ever arrives. It is checked per harness:
+
+- **OpenCode**: the server must answer, and must own that session. An
+  `opencode` TUI started without `--port` serves nothing agentctl can reach,
+  and OpenCode exports no server URL to shell commands, so push delivery needs
+  `opencode serve` plus `AGENTCTL_OPENCODE_URL`.
+- **Cursor**: the chat must already exist in Cursor's CLI store, and must not
+  be an IDE chat.
+
+When a target is refused, block on `agentctl wait <job>` instead, which returns
+the result directly and works everywhere.
 
 ## Cursor: the IDE cannot be notified
 

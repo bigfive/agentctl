@@ -125,8 +125,10 @@ you are in the IDE — go back to `agentctl wait`.
 
 ### If you are OpenCode
 
-A running OpenCode server is required; `agentctl daemon status` shows which one
-will be used.
+Push delivery needs an OpenCode **server** that agentctl can reach. An
+`opencode` TUI started without an explicit port does not serve one, and
+OpenCode does not tell you a server URL, so this often is not available. Try
+it, and fall back if it is not.
 
 Find your session id in the log:
 
@@ -134,19 +136,31 @@ Find your session id in the log:
 grep -o 'ses_[A-Za-z0-9]*' ~/.local/share/opencode/log/opencode.log | tail -1
 ```
 
-Confirm it is yours — with several sessions running the newest id may not be
-yours:
-
-```bash
-curl -s "http://127.0.0.1:4096/session/<candidate>" | grep -o '"directory":"[^"]*"'
-```
+Then register the wait:
 
 ```bash
 agentctl asyncwait "$a" --notify opencode:<your-session-id>
 ```
 
-Delivery carries a message id derived from the job, so the same completion
-cannot be added to your session twice.
+**If that returns exit `66`**, no server is reachable, or the one that is does
+not own your session. Do not retry it and do not tell the user an answer is
+coming. Use the blocking wait instead:
+
+```bash
+agentctl wait "$a"
+```
+
+That blocks until the child is done and prints the completion straight back to
+you. Exit codes: `0` succeeded, `70` the child failed, `71` cancelled.
+
+agentctl checks the server and the session when the wait is registered, so a
+target that cannot be notified fails immediately rather than leaving you
+waiting for a message that will never arrive.
+
+For push delivery to work, the user needs `opencode serve` running with
+`AGENTCTL_OPENCODE_URL` pointing at it. `agentctl daemon status` shows which
+URL is in use. Delivery carries a message id derived from the job, so the same
+completion cannot be added to your session twice.
 
 ## Step 3: what you receive
 

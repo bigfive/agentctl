@@ -57,6 +57,15 @@ IDE_STORE = os.path.expanduser(
     "~/Library/Application Support/Cursor/AgentStores/cursor_agent_stores")
 
 
+CLI_STORE = os.path.expanduser("~/.cursor/chats")
+
+
+def _cli_chat_exists(chat_id):
+    """True when Cursor's own CLI store already holds this chat."""
+    import glob
+    return bool(glob.glob(os.path.join(CLI_STORE, "*", chat_id)))
+
+
 def is_ide_chat(chat_id):
     """True when this chat belongs to the Cursor IDE rather than the CLI."""
     return os.path.isdir(os.path.join(IDE_STORE, chat_id))
@@ -84,6 +93,19 @@ class CursorNotify(NotifyAdapter):
                 "the IDE never displays" % target_id,
                 hint="block on 'agentctl wait <job>' instead, which returns "
                      "the result to you directly")
+
+    def preflight(self, target_id):
+        """The chat must already exist in Cursor's CLI store.
+
+        Delivering to an id the CLI has never seen would mint a brand new
+        chat and answer into it, which nobody is watching.
+        """
+        if not _cli_chat_exists(target_id):
+            raise InvalidTargetError(
+                "Cursor's CLI has no chat %s, so notifying it would create a "
+                "new one that nobody is reading" % target_id,
+                hint="block on 'agentctl wait <job>' instead")
+        return None
 
     def deliver(self, target_id, message, notification_id):
         argv = [config.resolve_binary("cursor"), "-p",

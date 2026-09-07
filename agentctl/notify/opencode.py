@@ -28,6 +28,39 @@ class OpenCodeNotify(NotifyAdapter):
             "opencode notification target is not a session id: %r" % target_id,
             hint="OpenCode session ids look like ses_f85ae7073ffe3i7aOYmTzCVnG1")
 
+    def preflight(self, target_id):
+        """The server must be reachable now, and must own this session.
+
+        An OpenCode TUI started without an explicit port serves nothing that
+        agentctl can reach, and exports no server URL, so this is the common
+        way for an OpenCode notification to be impossible.
+        """
+        base = config.opencode_base_url()
+        try:
+            status, body = httpc.request("GET", "%s/session/%s"
+                                         % (base, target_id), timeout=10)
+        except httpc.HttpError as exc:
+            if exc.status == 0:
+                raise InvalidTargetError(
+                    "no OpenCode server is reachable at %s, so session %s "
+                    "cannot be notified" % (base, target_id),
+                    hint="run 'opencode serve' and point "
+                         "AGENTCTL_OPENCODE_URL at it, or block on "
+                         "'agentctl wait <job>' instead")
+            if exc.status == 404:
+                raise InvalidTargetError(
+                    "the OpenCode server at %s does not have session %s"
+                    % (base, target_id),
+                    hint="confirm the session id, or point "
+                         "AGENTCTL_OPENCODE_URL at the server that owns it")
+            raise InvalidTargetError(
+                "cannot confirm OpenCode session %s: %s" % (target_id, exc))
+        if status != 200:
+            raise InvalidTargetError(
+                "the OpenCode server at %s answered HTTP %s for session %s"
+                % (base, status, target_id))
+        return None
+
     def deliver(self, target_id, message, notification_id):
         base = config.opencode_base_url()
         url = "%s/session/%s/prompt_async" % (base, target_id)
