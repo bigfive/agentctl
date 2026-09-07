@@ -10,9 +10,16 @@ Cursor trap:
 - A cloud agent id starts with ``bc-``. Cloud agents are not supported by this
   adapter, and passing one is an error rather than a silent local attempt.
 
-Cursor has no durable message queue. If the target chat already has a turn in
-flight, delivery fails and says so; agentctl does not queue behind it and does
-not retry, because a retry could duplicate the follow-up.
+Cursor has no durable message queue like Codex's. Measured behaviour on
+cursor-cli 2026.07.23: resuming a chat that already has a turn in flight is
+*accepted*, not rejected, and both turns complete and land in the same chat.
+So the failure mode is not a refusal; it is that two clients write to one chat
+concurrently and the resulting turn order is whatever the two runs produce.
+
+The busy check below is kept for the case where Cursor does report a busy
+chat, which is documented for its cloud agents. It has not been observed on
+the local path. Delivery is never retried either way, because a retry could
+duplicate a follow-up that in fact arrived.
 """
 
 import re

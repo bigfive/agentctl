@@ -85,7 +85,7 @@ unbounded transcript.
 |---|---|---|
 | codex | `codex exec --json` | `codex queue --thread` — a durable queue, delivered when the thread goes idle |
 | claude | `claude -p --output-format stream-json` | none; Claude's own wake, via `agentctl wait` or an `asyncRewake` hook |
-| cursor | `cursor-agent -p` on a chat from `create-chat` | `cursor-agent -p --resume` — no queue, so a busy chat is a loud failure |
+| cursor | `cursor-agent -p` on a chat from `create-chat` | `cursor-agent -p --resume` — no queue, so a completion can land beside a turn already running |
 | opencode | `opencode run --attach` on a pre-created session | `POST /session/<id>/prompt_async` on the running server |
 
 One path per harness. There is no fallback between transports: if the chosen

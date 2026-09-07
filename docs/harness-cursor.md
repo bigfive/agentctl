@@ -37,20 +37,30 @@ agentctl asyncwait "$a" --notify cursor:5a4f300a-61b1-4975-82e2-aa4be275aa49
 agentctl runs `cursor-agent -p --resume <your-chat-id>` with the completion
 envelope, which appends a new turn to that chat.
 
-## The busy-session limitation
+## What happens if your chat is already busy
 
-Cursor has no durable message queue. Codex can accept a queued message while a
-turn is running and deliver it when the thread goes idle; Cursor cannot.
+Codex can queue a message while a turn is running and deliver it when the
+thread goes idle. Cursor has no such queue, so it is worth knowing what it
+actually does instead.
 
-So if your chat already has a turn in flight when the child finishes:
+Measured on cursor-cli 2026.07.23: delivering into a chat that already had a
+turn in flight was **accepted**. Both turns ran and both landed in the same
+chat. Delivery was not refused, and the chat was not corrupted.
 
-- the delivery fails, and says the chat was busy
-- agentctl does not queue behind it, and does not retry, because a retry could
-  duplicate the follow-up in your context
-- the child's result is unaffected and still readable with
-  `agentctl read <job>`
+So the risk is not a rejected completion. It is that two clients wrote to one
+chat at once, and the order the turns appear in is simply the order the two
+runs finished. If you are mid-turn when a child completes, expect the
+completion to arrive beside your own work rather than after it.
 
-Check for that case with `agentctl status <job>`, which shows every wait and its
+If Cursor ever does report the chat as busy, agentctl fails loudly and does not
+retry, because a retry could duplicate a follow-up that in fact arrived. The
+child's result is unaffected and stays readable with `agentctl read <job>`.
+
+One thing that has **not** been tested: whether a completion delivered this way
+appears in a Cursor GUI session you are actively watching. It was verified
+against chats driven from the CLI. Do not assume the GUI picks it up live.
+
+Check any delivery with `agentctl status <job>`, which shows every wait and its
 delivery state.
 
 ## Which cursor binary is used
