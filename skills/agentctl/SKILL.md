@@ -125,10 +125,9 @@ you are in the IDE — go back to `agentctl wait`.
 
 ### If you are OpenCode
 
-Push delivery needs an OpenCode **server** that agentctl can reach. An
-`opencode` TUI started without an explicit port does not serve one, and
-OpenCode does not tell you a server URL, so this often is not available. Try
-it, and fall back if it is not.
+Push delivery needs an OpenCode **server** that agentctl can reach. A plain
+`opencode` TUI listens on no port at all and tells you no server URL, so this
+is often unavailable. Try it, and fall back if it is not.
 
 Find your session id in the log:
 
@@ -157,8 +156,9 @@ agentctl checks the server and the session when the wait is registered, so a
 target that cannot be notified fails immediately rather than leaving you
 waiting for a message that will never arrive.
 
-For push delivery to work, the user needs `opencode serve` running with
-`AGENTCTL_OPENCODE_URL` pointing at it. `agentctl daemon status` shows which
+For push delivery to work, the session must belong to a served instance:
+either the TUI was started as `opencode --port 4096`, or `opencode serve` is
+running with `AGENTCTL_OPENCODE_URL` pointing at it. `agentctl daemon status` shows which
 URL is in use. Delivery carries a message id derived from the job, so the same
 completion cannot be added to your session twice.
 

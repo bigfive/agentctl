@@ -31,9 +31,11 @@ class OpenCodeNotify(NotifyAdapter):
     def preflight(self, target_id):
         """The server must be reachable now, and must own this session.
 
-        An OpenCode TUI started without an explicit port serves nothing that
-        agentctl can reach, and exports no server URL, so this is the common
-        way for an OpenCode notification to be impossible.
+        A plain OpenCode TUI listens on no TCP port at all: it talks over a
+        unix socket and keeps state in its own SQLite database, and it exports
+        no server URL to shell commands. Starting it as
+        ``opencode --port 4096`` does expose the HTTP API. Both were measured
+        on opencode 1.18.20.
         """
         base = config.opencode_base_url()
         try:
@@ -44,9 +46,10 @@ class OpenCodeNotify(NotifyAdapter):
                 raise InvalidTargetError(
                     "no OpenCode server is reachable at %s, so session %s "
                     "cannot be notified" % (base, target_id),
-                    hint="run 'opencode serve' and point "
-                         "AGENTCTL_OPENCODE_URL at it, or block on "
-                         "'agentctl wait <job>' instead")
+                    hint="an opencode TUI serves no HTTP API unless it is "
+                         "started as 'opencode --port 4096'; otherwise run "
+                         "'opencode serve' and set AGENTCTL_OPENCODE_URL, or "
+                         "block on 'agentctl wait <job>' instead")
             if exc.status == 404:
                 raise InvalidTargetError(
                     "the OpenCode server at %s does not have session %s"
