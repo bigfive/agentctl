@@ -78,3 +78,33 @@ class TestResolveBinary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestLauncher(unittest.TestCase):
+    """The launcher must work when installed onto PATH as a symlink."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="agentctl-link-")
+        self.root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_runs_through_a_symlink(self):
+        import subprocess
+        link = os.path.join(self.dir, "agentctl")
+        os.symlink(os.path.join(self.root, "bin", "agentctl"), link)
+        process = subprocess.run([link, "--version"], stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, cwd="/", timeout=60)
+        self.assertEqual(process.returncode, 0, process.stderr.decode())
+        self.assertIn("agentctl", process.stdout.decode())
+
+    def test_runs_through_a_chain_of_symlinks(self):
+        import subprocess
+        first = os.path.join(self.dir, "one")
+        second = os.path.join(self.dir, "agentctl")
+        os.symlink(os.path.join(self.root, "bin", "agentctl"), first)
+        os.symlink(first, second)
+        process = subprocess.run([second, "--version"], stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, cwd="/", timeout=60)
+        self.assertEqual(process.returncode, 0, process.stderr.decode())

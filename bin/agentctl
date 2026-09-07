@@ -1,4 +1,16 @@
 #!/bin/sh
 # agentctl launcher. Keeps the package importable without installation.
-here=$(cd "$(dirname "$0")/.." && pwd)
+#
+# Resolves its own symlinks first: this script is normally installed onto PATH
+# as a symlink, and the package lives next to the real file, not next to the
+# link.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+here=$(cd "$(dirname "$target")/.." && pwd)
 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "${AGENTCTL_PYTHON:-python3}" -m agentctl "$@"

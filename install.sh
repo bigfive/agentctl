@@ -1,0 +1,108 @@
+#!/bin/sh
+# Install agentctl and its per-harness skills.
+#
+#   ./install.sh              install the CLI and every skill whose harness is present
+#   ./install.sh --skills     skills only
+#   ./install.sh --cli        the CLI only
+#   ./install.sh --uninstall  remove what this script installed
+#
+# Everything is symlinked, so a `git pull` updates the CLI and the skills
+# without reinstalling.
+
+set -eu
+
+ROOT=$(cd "$(dirname "$0")" && pwd)
+NAME=agentctl
+DO_CLI=yes
+DO_SKILLS=yes
+UNINSTALL=no
+
+for arg in "$@"; do
+    case "$arg" in
+        --cli) DO_SKILLS=no ;;
+        --skills) DO_CLI=no ;;
+        --uninstall) UNINSTALL=yes ;;
+        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown option: $arg" >&2; exit 64 ;;
+    esac
+done
+
+# Pick the first writable directory on PATH that a shell would actually find.
+pick_bindir() {
+    for dir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+        case ":$PATH:" in
+            *":$dir:"*) [ -d "$dir" ] && [ -w "$dir" ] && { echo "$dir"; return 0; } ;;
+        esac
+    done
+    return 1
+}
+
+# Where each harness reads user-level skills from. A harness is treated as
+# present when its parent directory already exists.
+skill_dir() {
+    case "$1" in
+        claude) echo "$HOME/.claude/skills" ;;
+        codex) echo "$HOME/.codex/skills" ;;
+        cursor) echo "$HOME/.cursor/skills" ;;
+        opencode) echo "$HOME/.config/opencode/skills" ;;
+    esac
+}
+
+harness_root() {
+    case "$1" in
+        claude) echo "$HOME/.claude" ;;
+        codex) echo "$HOME/.codex" ;;
+        cursor) echo "$HOME/.cursor" ;;
+        opencode) echo "$HOME/.config/opencode" ;;
+    esac
+}
+
+if [ "$UNINSTALL" = yes ]; then
+    for harness in claude codex cursor opencode; do
+        target="$(skill_dir "$harness")/$NAME"
+        if [ -L "$target" ]; then
+            rm "$target"
+            echo "removed  $target"
+        fi
+    done
+    for dir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+        link="$dir/$NAME"
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$ROOT/bin/$NAME" ]; then
+            rm "$link"
+            echo "removed  $link"
+        fi
+    done
+    echo "The job store at ${AGENTCTL_HOME:-$HOME/.agentctl} was left alone."
+    exit 0
+fi
+
+if [ "$DO_CLI" = yes ]; then
+    if ! bindir=$(pick_bindir); then
+        echo "No writable directory on PATH." >&2
+        echo "Create one and re-run, for example:" >&2
+        echo "  mkdir -p ~/.local/bin && export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+        exit 75
+    fi
+    ln -sf "$ROOT/bin/$NAME" "$bindir/$NAME"
+    echo "installed $bindir/$NAME"
+fi
+
+if [ "$DO_SKILLS" = yes ]; then
+    installed=0
+    for harness in claude codex cursor opencode; do
+        root=$(harness_root "$harness")
+        if [ ! -d "$root" ]; then
+            echo "skipped  $harness (not installed)"
+            continue
+        fi
+        dir=$(skill_dir "$harness")
+        mkdir -p "$dir"
+        ln -sfn "$ROOT/skills/$harness" "$dir/$NAME"
+        echo "installed $dir/$NAME"
+        installed=$((installed + 1))
+    done
+    [ "$installed" -gt 0 ] || echo "No harnesses found, so no skills were installed."
+fi
+
+echo
+echo "Check it with: $NAME daemon status"

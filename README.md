@@ -7,10 +7,26 @@ Supported harnesses: **codex**, **claude**, **cursor**, **opencode**.
 
 ## Install
 
-No dependencies beyond Python 3. Put the launcher on your `PATH`:
+No dependencies beyond Python 3.
 
 ```bash
-ln -s "$PWD/bin/agentctl" /usr/local/bin/agentctl
+./install.sh
+```
+
+That puts `agentctl` on your `PATH` and installs the matching skill into every
+harness it finds, so each agent knows how to use it without being told. Both
+are symlinks, so `git pull` updates them.
+
+```bash
+./install.sh --cli        # the command only
+./install.sh --skills     # the skills only
+./install.sh --uninstall  # remove both, leaving the job store alone
+```
+
+Confirm it worked:
+
+```bash
+agentctl daemon status
 ```
 
 ## The path this is built for
@@ -91,13 +107,27 @@ unbounded transcript.
 One path per harness. There is no fallback between transports: if the chosen
 interface is unavailable, the command fails and says so.
 
-Each harness has its own short instruction sheet, including how an agent finds
-its own session id:
+## Teaching each harness to use it
 
-- [Codex](docs/harness-codex.md)
-- [Claude Code](docs/harness-claude.md)
-- [Cursor](docs/harness-cursor.md)
-- [OpenCode](docs/harness-opencode.md)
+Each harness gets a skill, installed by `install.sh` into the directory that
+harness reads. The skill is what makes an agent reach for `agentctl` on its
+own, and it carries the one thing that genuinely differs per harness: how an
+agent finds **its own** session id in order to be notified.
+
+| Harness | Skill | Installed to |
+|---|---|---|
+| Codex | [skills/codex](skills/codex/SKILL.md) | `~/.codex/skills/agentctl/` |
+| Claude Code | [skills/claude](skills/claude/SKILL.md) | `~/.claude/skills/agentctl/` |
+| Cursor | [skills/cursor](skills/cursor/SKILL.md) | `~/.cursor/skills/agentctl/` |
+| OpenCode | [skills/opencode](skills/opencode/SKILL.md) | `~/.config/opencode/skills/agentctl/` |
+
+All four harnesses use the same skill format — a directory holding `SKILL.md`
+with `name` and `description` frontmatter — so the four skills differ only in
+content, not in shape. OpenCode also scans `~/.claude/skills` by default, so it
+may see the Claude skill as well; its own skill is the one written for it.
+
+Read them directly if you want the per-harness detail: they are plain
+markdown, and they are the only copy of these instructions.
 
 ## What this does not do
 
