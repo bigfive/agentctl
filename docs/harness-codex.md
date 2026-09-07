@@ -65,4 +65,6 @@ Read the whole result with `agentctl read <job>`, the raw event stream with
   produce a second follow-up.
 - `codex` may not be on your `PATH`; on macOS it ships inside
   `/Applications/ChatGPT.app/Contents/Resources/codex`. agentctl looks there
-  itself, and `AGENTCTL_CODEX_BIN` overrides the lookup.
+  itself, and `AGENTCTL_CODEX_BIN` overrides the lookup. The bundled copy is a
+  separate build that can drift in version from one you install yourself, so
+  `PATH` wins whenever a `codex` is on it.

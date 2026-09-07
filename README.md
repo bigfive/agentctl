@@ -145,7 +145,10 @@ daemon restart cannot create a second follow-up.
 | `AGENTCTL_OPENCODE_URL` | the running OpenCode server (default `http://127.0.0.1:4096`) |
 
 `codex` is often absent from `PATH`; on macOS agentctl also looks in
-`/Applications/ChatGPT.app/Contents/Resources/codex`.
+`/Applications/ChatGPT.app/Contents/Resources/codex`. That bundled copy is a
+separate build from a Homebrew or npm install and updates on the app's own
+schedule, so the two can drift apart in version. `PATH` is always preferred,
+and the bundle is only reached when no `codex` is on `PATH` at all.
 
 The daemon inherits the environment of whichever command first started it. If
 you change one of these variables, restart it with `agentctl daemon stop &&
