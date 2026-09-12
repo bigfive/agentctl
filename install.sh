@@ -7,8 +7,9 @@
 #   ./install.sh --cli        the CLI only
 #   ./install.sh --uninstall  remove what this script installed
 #
-# Everything is symlinked, so a `git pull` updates the CLI and the skills
-# without reinstalling.
+# The CLI and skills are symlinked, so a `git pull` updates them without
+# reinstalling. The OpenCode plugin is copied because OpenCode resolves its
+# dependencies relative to the installed plugin path, not a symlink target.
 
 set -eu
 
@@ -85,7 +86,7 @@ if [ "$UNINSTALL" = yes ]; then
         fi
     done
     plugin="$HOME/.config/opencode/plugins/agentctl.mjs"
-    if [ -L "$plugin" ] && [ "$(readlink "$plugin")" = "$ROOT/opencode/agentctl.mjs" ]; then
+    if { [ -L "$plugin" ] && [ "$(readlink "$plugin")" = "$ROOT/opencode/agentctl.mjs" ]; } || { [ -f "$plugin" ] && cmp -s "$ROOT/opencode/agentctl.mjs" "$plugin"; }; then
         rm "$plugin"
         echo "removed  $plugin"
     fi
@@ -103,7 +104,10 @@ fi
 if [ "$DO_OPENCODE_PLUGIN" = yes ]; then
     plugin_dir="$HOME/.config/opencode/plugins"
     mkdir -p "$plugin_dir"
-    ln -sfn "$ROOT/opencode/agentctl.mjs" "$plugin_dir/agentctl.mjs"
+    if [ -L "$plugin_dir/agentctl.mjs" ] && [ "$(readlink "$plugin_dir/agentctl.mjs")" = "$ROOT/opencode/agentctl.mjs" ]; then
+        rm "$plugin_dir/agentctl.mjs"
+    fi
+    cp "$ROOT/opencode/agentctl.mjs" "$plugin_dir/agentctl.mjs"
     echo "installed $plugin_dir/agentctl.mjs"
 fi
 
