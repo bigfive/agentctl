@@ -6,6 +6,7 @@ fallback between transports: if the named binary is not found, agentctl fails.
 
 import os
 import shutil
+import base64
 
 from .errors import PrerequisiteMissingError
 
@@ -88,6 +89,27 @@ def opencode_base_url():
         if value:
             return value.rstrip("/")
     return DEFAULT_OPENCODE_URL
+
+
+def opencode_credentials():
+    """Return credentials for a user-owned OpenCode server."""
+    username = os.environ.get(
+        "AGENTCTL_OPENCODE_USERNAME",
+        os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
+    )
+    password = os.environ.get(
+        "AGENTCTL_OPENCODE_PASSWORD",
+        os.environ.get("OPENCODE_SERVER_PASSWORD", ""),
+    )
+    return username, password
+
+
+def opencode_auth_header():
+    username, password = opencode_credentials()
+    if not password:
+        return None
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return "Basic %s" % token
 
 
 def resolve_binary(harness):

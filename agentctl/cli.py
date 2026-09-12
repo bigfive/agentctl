@@ -2,7 +2,7 @@
 
     agentctl start <harness> <prompt> [--cwd DIR] [--model M]
     agentctl asyncwait <job> --notify <harness>:<session-id>
-    agentctl wait <job> [--rewake] [--timeout SECONDS]
+    agentctl wait <job> [--rewake] [--timeout SECONDS] [--json]
     agentctl status <job>
     agentctl read <job> [--stream | --stderr]
     agentctl followup <job> <prompt>
@@ -86,6 +86,7 @@ def _build_parser():
                            "as a Claude asyncRewake hook")
     wait.add_argument("--timeout", type=float, default=None,
                       help="seconds to wait before giving up")
+    wait.add_argument("--json", action="store_true")
     wait.set_defaults(handler=cmd_wait)
 
     status = sub.add_parser("status", help="show a job snapshot")
@@ -171,6 +172,17 @@ def cmd_wait(args):
     messages = [envelope.build(record, store.read_result(record["job"]))
                 for record in records]
     text = "\n\n".join(messages)
+
+    if args.json:
+        print(json.dumps({
+            "jobs": [dict(record, result=store.read_result(record["job"]))
+                     for record in records],
+        }, indent=2, sort_keys=True))
+        if any(record["status"] == store.CANCELLED for record in records):
+            return ExitCode.CHILD_CANCELLED
+        if any(record["status"] == store.FAILED for record in records):
+            return ExitCode.CHILD_FAILED
+        return ExitCode.OK
 
     if args.rewake:
         # Claude's asyncRewake contract: the hook's stderr becomes the system

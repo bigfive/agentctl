@@ -17,10 +17,12 @@ class HttpError(Exception):
         self.url = url
 
 
-def request(method, url, payload=None, timeout=30):
+def request(method, url, payload=None, timeout=30, auth_header=None):
     """Perform one request and return ``(status, parsed body or raw text)``."""
     data = None
     headers = {"Accept": "application/json"}
+    if auth_header:
+        headers["Authorization"] = auth_header
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"

@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,6 +75,23 @@ class TestResolveBinary(unittest.TestCase):
         for harness in config.HARNESSES:
             self.assertTrue(config.BINARY_NAMES[harness],
                             "%s has no candidate names" % harness)
+
+    def test_opencode_auth_uses_agentctl_credentials(self):
+        with patch.dict(os.environ, {
+            "AGENTCTL_OPENCODE_USERNAME": "voice",
+            "AGENTCTL_OPENCODE_PASSWORD": "secret",
+            "OPENCODE_SERVER_USERNAME": "ignored",
+            "OPENCODE_SERVER_PASSWORD": "ignored",
+        }, clear=False):
+            self.assertEqual(config.opencode_credentials(), ("voice", "secret"))
+            self.assertEqual(config.opencode_auth_header(), "Basic dm9pY2U6c2VjcmV0")
+
+    def test_opencode_auth_is_optional(self):
+        with patch.dict(os.environ, {
+            "AGENTCTL_OPENCODE_USERNAME": "voice",
+            "AGENTCTL_OPENCODE_PASSWORD": "",
+        }, clear=False):
+            self.assertIsNone(config.opencode_auth_header())
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ symlinks, so `git pull` updates them.
 ```bash
 ./install.sh --cli        # the command only
 ./install.sh --skills     # the skill only
+./install.sh --opencode-plugin  # optional native OpenCode `agentctl` tool
 ./install.sh --uninstall  # remove both; the job store is left alone
 agentctl daemon status    # confirm it works
 ```
@@ -61,7 +62,7 @@ full: agentctl read job_9f2c11a7e4d0
 ```text
 agentctl start <harness> <prompt> [--cwd DIR] [--model M]
 agentctl asyncwait <job> --notify <harness>:<session-id>
-agentctl wait <job>... [--rewake] [--timeout SECONDS]
+agentctl wait <job>... [--rewake] [--timeout SECONDS] [--json]
 agentctl status <job>
 agentctl read <job> [--stream | --stderr]
 agentctl followup <job> <prompt>
@@ -76,6 +77,29 @@ exactly. Add `--json` to most commands for the full record.
 Three identifiers exist and are never interchangeable: the agentctl job handle
 (`job_...`), the wait handle (`wait_...`), and the harness's own session id.
 
+## Optional OpenCode tool
+
+The optional plugin installs one model-facing tool named `agentctl` into
+OpenCode. It wraps the CLI rather than asking the model to construct shell
+commands. The tool supports `start`, `status`, `read`, `followup`, `cancel`,
+and `list`. `start` and `followup` return a job handle immediately; the plugin
+waits on agentctl's durable job and wakes the originating OpenCode session with
+the authenticated plugin SDK client when it finishes.
+
+Install it explicitly:
+
+```bash
+./install.sh --opencode-plugin
+```
+
+The plugin runs inside the OpenCode server, so it uses that server's own
+authenticated client and current session ID. It does not depend on the
+OpenCode desktop app's private random-port server. The OpenCode server process
+must be able to find `agentctl` (or you can set `AGENTCTL_BIN` to its absolute
+path). The completion callback is best-effort if the server itself is
+restarted; the job remains durable and is still available through `status` and
+`read`.
+
 ## Harness notes
 
 | Harness | Child runs as | Completion delivered by |
@@ -83,7 +107,7 @@ Three identifiers exist and are never interchangeable: the agentctl job handle
 | codex | `codex exec --json` | `codex queue --thread` (queued until the thread is idle) |
 | claude | `claude -p --output-format stream-json` | Claude's own wake: `agentctl wait`, or `wait --rewake` from an `asyncRewake` hook |
 | cursor | `cursor-agent -p` on a new chat | `cursor-agent -p --resume` — terminal (`cursor-agent`) chats only |
-| opencode | `opencode run --attach` on a new session | `POST /session/<id>/prompt_async` on a running server |
+| opencode | `opencode run --attach` on a new session | `POST /session/<id>/prompt_async` on a running server, or the optional plugin's authenticated SDK callback |
 
 Things to know per harness:
 
@@ -92,8 +116,10 @@ Things to know per harness:
   chat ids. From an IDE session, use `agentctl wait`. Push delivery works from
   `cursor-agent` in a terminal.
 - **OpenCode needs a reachable server.** The TUI without `--port` exposes
-  none. Run `opencode serve` and set `AGENTCTL_OPENCODE_URL`, or use
-  `agentctl wait`.
+  none. Run `opencode serve`, set `AGENTCTL_OPENCODE_URL`, and provide
+  `AGENTCTL_OPENCODE_USERNAME` / `AGENTCTL_OPENCODE_PASSWORD` when the server
+  uses Basic auth. The OpenCode plugin inherits the server's authenticated SDK
+  client; use `agentctl wait` if the server is unavailable.
 - **Codex** is often not on `PATH`. On macOS agentctl falls back to the copy
   bundled in `ChatGPT.app`, which may differ in version from a Homebrew or npm
   install. `PATH` always wins when present.
@@ -156,9 +182,15 @@ both paths lead to the same file.
 | `AGENTCTL_HOME` | store, socket, and log location (default `~/.agentctl`) |
 | `AGENTCTL_<HARNESS>_BIN` | override a harness binary, e.g. `AGENTCTL_CODEX_BIN` |
 | `AGENTCTL_OPENCODE_URL` | the OpenCode server (default `http://127.0.0.1:4096`) |
+| `AGENTCTL_OPENCODE_USERNAME` | Basic-auth username (default `opencode`) |
+| `AGENTCTL_OPENCODE_PASSWORD` | Basic-auth password for the user-owned server |
+| `AGENTCTL_BIN` | absolute path to the agentctl executable used by the OpenCode plugin |
 
 The daemon inherits the environment of whichever command first started it.
 After changing a variable, run `agentctl daemon stop && agentctl daemon start`.
+For OpenCode children, agentctl maps its configured credentials to
+`OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` for `opencode run
+--attach`.
 
 On-disk layout:
 

@@ -88,7 +88,7 @@ Assume an OpenCode server is already running. Deliver to the target session thro
 POST /session/<session-id>/prompt_async
 ```
 
-The parent agent can discover its own `ses_...` ID from OpenCode's session logs and include it in the `--notify` target. The plan does not require an OpenCode plugin for the initial path.
+The parent agent can discover its own `ses_...` ID from OpenCode's session logs and include it in the `--notify` target. The optional OpenCode plugin is the preferred model-facing path: it exposes one native `agentctl` tool and uses the plugin SDK's authenticated `session.promptAsync` callback, so the model does not need to construct shell commands or discover a notification transport.
 
 ### Cursor
 

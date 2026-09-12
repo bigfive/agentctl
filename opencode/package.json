@@ -1,0 +1,6 @@
+{
+  "name": "agentctl-opencode-plugin",
+  "private": true,
+  "type": "module",
+  "description": "Optional OpenCode tool wrapper for agentctl"
+}

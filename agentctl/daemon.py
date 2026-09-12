@@ -81,12 +81,19 @@ class Daemon(object):
         stream = open(store.stream_path(job_id), "ab", 0)
         errlog = open(store.stderr_path(job_id), "ab", 0)
         try:
+            environment = os.environ.copy()
+            if record["harness"] == "opencode":
+                username, password = config.opencode_credentials()
+                environment["OPENCODE_SERVER_USERNAME"] = username
+                if password:
+                    environment["OPENCODE_SERVER_PASSWORD"] = password
             process = subprocess.Popen(
                 record["command"],
                 cwd=record["cwd"],
                 stdin=subprocess.PIPE,
                 stdout=stream,
                 stderr=errlog,
+                env=environment,
                 # Its own process session: the child outlives the daemon, and
                 # cancelling it can signal the whole group.
                 start_new_session=True,

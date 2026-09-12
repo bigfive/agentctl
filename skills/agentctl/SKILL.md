@@ -123,11 +123,14 @@ Your chat id is the last path segment under `~/.cursor/chats/<hash>/`, and
 with `bc-` is a cloud agent and is not supported. If this returns exit `67`,
 you are in the IDE — go back to `agentctl wait`.
 
-### If you are OpenCode
+### If you are OpenCode without the optional plugin
 
 Push delivery needs an OpenCode **server** that agentctl can reach. A plain
-`opencode` TUI listens on no port at all and tells you no server URL, so this
-is often unavailable. Try it, and fall back if it is not.
+`opencode` TUI or Desktop app may use a private loopback backend, but it does
+not provide a stable server URL and credentials for agentctl to target. Use a
+separately started `opencode serve` instance instead, then configure
+`AGENTCTL_OPENCODE_URL` and, when needed, `AGENTCTL_OPENCODE_USERNAME` plus
+`AGENTCTL_OPENCODE_PASSWORD`.
 
 Find your session id in the log:
 
@@ -156,11 +159,26 @@ agentctl checks the server and the session when the wait is registered, so a
 target that cannot be notified fails immediately rather than leaving you
 waiting for a message that will never arrive.
 
-For push delivery to work, the session must belong to a served instance:
-either the TUI was started as `opencode --port 4096`, or `opencode serve` is
-running with `AGENTCTL_OPENCODE_URL` pointing at it. `agentctl daemon status` shows which
-URL is in use. Delivery carries a message id derived from the job, so the same
-completion cannot be added to your session twice.
+For push delivery to work, the session must belong to the served instance at
+the configured URL. `agentctl daemon status` shows which URL is in use.
+Delivery carries a message id derived from the job, so the same completion
+cannot be added to your session twice.
+
+### If the optional OpenCode plugin is installed
+
+Prefer the native `agentctl` tool. It wraps the durable daemon and already
+knows the current OpenCode session, so you do not need to discover a `ses_...`
+ID or construct a shell command:
+
+```text
+agentctl({ action: "start", harness: "codex", prompt: "..." })
+```
+
+The tool returns a job handle immediately. When the job finishes, the plugin
+uses OpenCode's authenticated SDK client to send a `promptAsync` callback to
+this session. Use the same tool with `status`, `read`, `followup`, `cancel`, or
+`list` as needed. Install the optional plugin with
+`./install.sh --opencode-plugin` from the agentctl repository.
 
 ## Step 3: what you receive
 

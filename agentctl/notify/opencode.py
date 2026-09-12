@@ -39,8 +39,9 @@ class OpenCodeNotify(NotifyAdapter):
         """
         base = config.opencode_base_url()
         try:
-            status, body = httpc.request("GET", "%s/session/%s"
-                                         % (base, target_id), timeout=10)
+            status, body = httpc.request(
+                "GET", "%s/session/%s" % (base, target_id), timeout=10,
+                auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             if exc.status == 0:
                 raise InvalidTargetError(
@@ -72,7 +73,9 @@ class OpenCodeNotify(NotifyAdapter):
             "parts": [{"type": "text", "text": message}],
         }
         try:
-            status, body = httpc.request("POST", url, payload)
+            status, body = httpc.request(
+                "POST", url, payload,
+                auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             raise DeliveryError(
                 "opencode prompt_async failed: %s" % exc,

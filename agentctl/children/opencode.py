@@ -21,7 +21,9 @@ class OpenCodeChild(ChildAdapter):
         base = config.opencode_base_url()
         url = "%s/session?directory=%s" % (base, urllib.parse.quote(cwd))
         try:
-            status, body = httpc.request("POST", url, {"title": "agentctl child"})
+            status, body = httpc.request(
+                "POST", url, {"title": "agentctl child"},
+                auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             raise PrerequisiteMissingError(
                 "cannot create an OpenCode session on %s: %s" % (base, exc),

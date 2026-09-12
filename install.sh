@@ -2,6 +2,7 @@
 # Install agentctl and its per-harness skills.
 #
 #   ./install.sh              install the CLI and every skill whose harness is present
+#   ./install.sh --opencode-plugin  also install the optional OpenCode tool
 #   ./install.sh --skills     skills only
 #   ./install.sh --cli        the CLI only
 #   ./install.sh --uninstall  remove what this script installed
@@ -15,12 +16,14 @@ ROOT=$(cd "$(dirname "$0")" && pwd)
 NAME=agentctl
 DO_CLI=yes
 DO_SKILLS=yes
+DO_OPENCODE_PLUGIN=no
 UNINSTALL=no
 
 for arg in "$@"; do
     case "$arg" in
         --cli) DO_SKILLS=no ;;
         --skills) DO_CLI=no ;;
+        --opencode-plugin) DO_OPENCODE_PLUGIN=yes ;;
         --uninstall) UNINSTALL=yes ;;
         -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 64 ;;
@@ -81,6 +84,11 @@ if [ "$UNINSTALL" = yes ]; then
             echo "removed  $target"
         fi
     done
+    plugin="$HOME/.config/opencode/plugins/agentctl.mjs"
+    if [ -L "$plugin" ] && [ "$(readlink "$plugin")" = "$ROOT/opencode/agentctl.mjs" ]; then
+        rm "$plugin"
+        echo "removed  $plugin"
+    fi
     for dir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
         link="$dir/$NAME"
         if [ -L "$link" ] && [ "$(readlink "$link")" = "$ROOT/bin/$NAME" ]; then
@@ -90,6 +98,13 @@ if [ "$UNINSTALL" = yes ]; then
     done
     echo "The job store at ${AGENTCTL_HOME:-$HOME/.agentctl} was left alone."
     exit 0
+fi
+
+if [ "$DO_OPENCODE_PLUGIN" = yes ]; then
+    plugin_dir="$HOME/.config/opencode/plugins"
+    mkdir -p "$plugin_dir"
+    ln -sfn "$ROOT/opencode/agentctl.mjs" "$plugin_dir/agentctl.mjs"
+    echo "installed $plugin_dir/agentctl.mjs"
 fi
 
 if [ "$DO_CLI" = yes ]; then
