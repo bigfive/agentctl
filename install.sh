@@ -10,6 +10,8 @@
 # The CLI and skills are symlinked, so a `git pull` updates them without
 # reinstalling. The OpenCode plugin is copied because OpenCode resolves its
 # dependencies relative to the installed plugin path, not a symlink target.
+# Its CLI helper is linked beside that copied plugin so it does not depend on
+# the PATH inherited by a GUI-launched OpenCode server.
 
 set -eu
 
@@ -90,6 +92,13 @@ if [ "$UNINSTALL" = yes ]; then
         rm "$plugin"
         echo "removed  $plugin"
     fi
+    plugin_bin="$HOME/.config/opencode/plugins/agentctl/bin/$NAME"
+    if [ -L "$plugin_bin" ] && [ "$(readlink "$plugin_bin")" = "$ROOT/bin/$NAME" ]; then
+        rm "$plugin_bin"
+        rmdir "$(dirname "$plugin_bin")" 2>/dev/null || true
+        rmdir "$(dirname "$(dirname "$plugin_bin")")" 2>/dev/null || true
+        echo "removed  $plugin_bin"
+    fi
     for dir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
         link="$dir/$NAME"
         if [ -L "$link" ] && [ "$(readlink "$link")" = "$ROOT/bin/$NAME" ]; then
@@ -109,6 +118,10 @@ if [ "$DO_OPENCODE_PLUGIN" = yes ]; then
     fi
     cp "$ROOT/opencode/agentctl.mjs" "$plugin_dir/agentctl.mjs"
     echo "installed $plugin_dir/agentctl.mjs"
+    plugin_bin_dir="$plugin_dir/agentctl/bin"
+    mkdir -p "$plugin_bin_dir"
+    ln -sfn "$ROOT/bin/$NAME" "$plugin_bin_dir/$NAME"
+    echo "installed $plugin_bin_dir/$NAME"
 fi
 
 if [ "$DO_CLI" = yes ]; then

@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { tool } from '@opencode-ai/plugin'
 
@@ -10,7 +12,8 @@ function json(value) {
 }
 
 async function runAgentctl(args, { allowFailure = false } = {}) {
-  const command = process.env.AGENTCTL_BIN || 'agentctl'
+  const pluginAgentctl = fileURLToPath(new URL('./agentctl/bin/agentctl', import.meta.url))
+  const command = process.env.AGENTCTL_BIN || (existsSync(pluginAgentctl) ? pluginAgentctl : 'agentctl')
   try {
     const result = await execFileAsync(command, args, {
       env: process.env,

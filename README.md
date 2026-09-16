@@ -94,11 +94,12 @@ Install it explicitly:
 
 The plugin runs inside the OpenCode server, so it uses that server's own
 authenticated client and current session ID. It does not depend on the
-OpenCode desktop app's private random-port server. The OpenCode server process
-must be able to find `agentctl` (or you can set `AGENTCTL_BIN` to its absolute
-path). The completion callback is best-effort if the server itself is
-restarted; the job remains durable and is still available through `status` and
-`read`.
+OpenCode desktop app's private random-port server. The installer places a
+symlink to the CLI at `~/.config/opencode/plugins/agentctl/bin/agentctl`, and
+the plugin prefers that plugin-relative path. `AGENTCTL_BIN` remains available
+as an explicit override. The completion callback is best-effort if the server
+itself is restarted; the job remains durable and is still available through
+`status` and `read`.
 
 ## Harness notes
 
