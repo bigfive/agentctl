@@ -1,10 +1,10 @@
 """OpenCode notification adapter.
 
-Mechanism: ``POST /session/<session-id>/prompt_async`` on an already running
-OpenCode server. Verified against opencode 1.18.20, which answers 204 on
-acceptance.
+Mechanism: ``POST /api/session/<session-id>/prompt`` on an already running
+OpenCode server. The v2 REST API was verified against opencode 2.0.32. The
+server admits the input to its durable inbox before returning.
 
-The request carries a caller-supplied ``messageID`` derived from the
+The request carries a caller-supplied message ``id`` derived from the
 notification id, so the same completion cannot be appended twice even if the
 delivery is somehow attempted again.
 """
@@ -31,25 +31,20 @@ class OpenCodeNotify(NotifyAdapter):
     def preflight(self, target_id):
         """The server must be reachable now, and must own this session.
 
-        A plain OpenCode TUI listens on no TCP port at all: it talks over a
-        unix socket and keeps state in its own SQLite database, and it exports
-        no server URL to shell commands. Starting it as
-        ``opencode --port 4096`` does expose the HTTP API. Both were measured
-        on opencode 1.18.20.
+        The OpenCode server must be running and expose its v2 HTTP API. This
+        adapter uses the v2 ``/api`` routes.
         """
         base = config.opencode_base_url()
         try:
             status, body = httpc.request(
-                "GET", "%s/session/%s" % (base, target_id), timeout=10,
+                "GET", "%s/api/session/%s" % (base, target_id), timeout=10,
                 auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             if exc.status == 0:
                 raise InvalidTargetError(
                     "no OpenCode server is reachable at %s, so session %s "
                     "cannot be notified" % (base, target_id),
-                    hint="an opencode TUI serves no HTTP API unless it is "
-                         "started as 'opencode --port 4096'; otherwise run "
-                         "'opencode serve' and set AGENTCTL_OPENCODE_URL, or "
+                    hint="run 'opencode serve' and set AGENTCTL_OPENCODE_URL, or "
                          "block on 'agentctl wait <job>' instead")
             if exc.status == 404:
                 raise InvalidTargetError(
@@ -67,10 +62,11 @@ class OpenCodeNotify(NotifyAdapter):
 
     def deliver(self, target_id, message, notification_id):
         base = config.opencode_base_url()
-        url = "%s/session/%s/prompt_async" % (base, target_id)
+        url = "%s/api/session/%s/prompt" % (base, target_id)
         payload = {
-            "messageID": ids.opencode_message_id(notification_id),
-            "parts": [{"type": "text", "text": message}],
+            "id": ids.opencode_message_id(notification_id),
+            "text": message,
+            "delivery": "queue",
         }
         try:
             status, body = httpc.request(
@@ -78,10 +74,10 @@ class OpenCodeNotify(NotifyAdapter):
                 auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             raise DeliveryError(
-                "opencode prompt_async failed: %s" % exc,
+                "opencode prompt admission failed: %s" % exc,
                 hint="the OpenCode server at %s must be running and must own "
                      "session %s" % (base, target_id))
         if status not in (200, 202, 204):
             raise DeliveryError(
-                "opencode prompt_async returned HTTP %s: %s" % (status, body))
-        return {"transport": "opencode prompt_async", "response": status}
+                "opencode prompt admission returned HTTP %s: %s" % (status, body))
+        return {"transport": "opencode v2 session prompt", "response": status}

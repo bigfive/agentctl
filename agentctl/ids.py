@@ -39,11 +39,11 @@ def notification_id(wait_id, job_id, status):
 
 
 def opencode_message_id(notification_id_value):
-    """OpenCode message ids must match ``^msg``.
+    """OpenCode v2 message ids must match ``^msg_``.
 
     Reusing the notification id makes the OpenCode delivery idempotent on the
     server side as well as in the agentctl store.
     """
-    return "msg" + hashlib.sha256(
+    return "msg_" + hashlib.sha256(
         notification_id_value.encode("utf-8")
     ).hexdigest()[:24]

@@ -108,7 +108,7 @@ itself is restarted; the job remains durable and is still available through
 | codex | `codex exec --json` | `codex queue --thread` (queued until the thread is idle) |
 | claude | `claude -p --output-format stream-json` | Claude's own wake: `agentctl wait`, or `wait --rewake` from an `asyncRewake` hook |
 | cursor | `cursor-agent -p` on a new chat | `cursor-agent -p --resume` — terminal (`cursor-agent`) chats only |
-| opencode | `opencode run --attach` on a new session | `POST /session/<id>/prompt_async` on a running server, or the optional plugin's authenticated SDK callback |
+| opencode | `opencode run --server` on a new session | `POST /api/session/<id>/prompt` on a running server, or the optional plugin's authenticated SDK callback |
 
 Things to know per harness:
 
@@ -116,8 +116,8 @@ Things to know per harness:
   from the command line is not shown in the IDE, so `asyncwait` refuses IDE
   chat ids. From an IDE session, use `agentctl wait`. Push delivery works from
   `cursor-agent` in a terminal.
-- **OpenCode needs a reachable server.** The TUI without `--port` exposes
-  none. Run `opencode serve`, set `AGENTCTL_OPENCODE_URL`, and provide
+- **OpenCode needs a reachable v2 API server.** Run `opencode serve`, set
+  `AGENTCTL_OPENCODE_URL`, and provide
   `AGENTCTL_OPENCODE_USERNAME` / `AGENTCTL_OPENCODE_PASSWORD` when the server
   uses Basic auth. The OpenCode plugin inherits the server's authenticated SDK
   client; use `agentctl wait` if the server is unavailable.
@@ -191,7 +191,8 @@ The daemon inherits the environment of whichever command first started it.
 After changing a variable, run `agentctl daemon stop && agentctl daemon start`.
 For OpenCode children, agentctl maps its configured credentials to
 `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` for `opencode run
---attach`.
+--server`. The OpenCode child and notification adapters use the v2 `/api`
+routes, verified with OpenCode 2.0.32.
 
 On-disk layout:
 

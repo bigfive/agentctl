@@ -2,12 +2,10 @@
 
 A running OpenCode server is a prerequisite. agentctl never starts one.
 
-The session is created on that server first (``POST /session``), then
-``opencode run --attach <url> --session <id>`` drives the turn as a watchable
-subprocess. Verified against opencode 1.18.20.
+The session is created on that server first (``POST /api/session``), then
+``opencode run --server <url> --session <id>`` drives the turn as a watchable
+subprocess. The v2 REST API and CLI were verified against opencode 2.0.32.
 """
-
-import urllib.parse
 
 from .. import config, httpc
 from ..errors import PrerequisiteMissingError
@@ -19,17 +17,18 @@ class OpenCodeChild(ChildAdapter):
 
     def preallocate_session(self, cwd, model):
         base = config.opencode_base_url()
-        url = "%s/session?directory=%s" % (base, urllib.parse.quote(cwd))
+        url = "%s/api/session" % base
         try:
             status, body = httpc.request(
-                "POST", url, {"title": "agentctl child"},
+                "POST", url, {"location": {"directory": cwd}},
                 auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
             raise PrerequisiteMissingError(
                 "cannot create an OpenCode session on %s: %s" % (base, exc),
                 hint="start the server with 'opencode serve' or point "
                      "AGENTCTL_OPENCODE_URL at a running one")
-        session_id = (body or {}).get("id") if isinstance(body, dict) else None
+        data = (body or {}).get("data", body) if isinstance(body, dict) else None
+        session_id = data.get("id") if isinstance(data, dict) else None
         if status != 200 or not session_id:
             raise PrerequisiteMissingError(
                 "OpenCode did not return a session id (HTTP %s)" % status)
@@ -37,9 +36,8 @@ class OpenCodeChild(ChildAdapter):
 
     def _base(self, session_id, cwd, model):
         argv = [config.resolve_binary("opencode"), "run",
-                "--attach", config.opencode_base_url(),
+                "--server", config.opencode_base_url(),
                 "--session", session_id,
-                "--dir", cwd,
                 "--format", "json",
                 # Approve every permission that is not explicitly denied. An
                 # unanswered permission prompt would hang an unwatched child.
