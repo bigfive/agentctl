@@ -37,7 +37,7 @@ bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json issue add \
   --id rain --title 'Rain poem' --body-file /tmp/my-poem-pipeline/rain.md
 bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json issue add \
   --id ocean --title 'Ocean poem' --body-file /tmp/my-poem-pipeline/ocean.md
-bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json start
+bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json start --notify codex:NATIVE-SESSION-ID
 ```
 
 This starts real Codex workers through the installed agentctl. Each item gets
@@ -53,7 +53,7 @@ completion for inspection; cleanup is manual.
 ## Definition
 
 All top-level fields below are required. Notification destinations are supplied with `start --notify`, not stored in
-the workflow config. Omitting it disables new alerts for that invocation. Stage `type` is optional and defaults to `llm` for
+the workflow config. `start` requires either `--notify` or an explicit `--no-notifications`. Stage `type` is optional and defaults to `llm` for
 compatibility with existing configurations; `human` must be explicit. Paths are relative to the config file
 unless absolute. `model: null` explicitly selects the harness's default model.
 Timeouts and polling intervals are finite positive seconds. Pool capacities are
@@ -358,6 +358,10 @@ agentctl-team --config pipeline.json start --notify codex:NATIVE-SESSION-ID
 ```
 
 Specify it again on restart; no previous destination is silently reused.
+To intentionally disable new alerts use `start --no-notifications`. Omitting
+both flags, or supplying both, fails before starting the runner. This also
+applies to `--once` and `--daemon`. Identify the native session as documented
+in the installed agentctl-team skill; do not opt out silently when lookup fails.
 Old `notifications` config fields fail with a migration error. Already-recorded
 notifications retain their original destination and delivery state.
 

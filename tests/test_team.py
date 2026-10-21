@@ -283,7 +283,7 @@ class PipelineTest(unittest.TestCase):
         self.p.add('one', 'One', 'Body')
         with self.p.store.lock('scheduler', blocking=False):
             result = subprocess.run([str(ROOT / 'bin/agentctl-team'), '--config',
-                                     str(self.config), 'start', '--once'],
+                                     str(self.config), 'start', '--once', '--no-notifications'],
                                     capture_output=True, text=True)
         self.assertNotEqual(0, result.returncode)
         self.assertEqual([], self.jobs())
@@ -332,7 +332,7 @@ class PipelineTest(unittest.TestCase):
         self.definition['stages']['review']['outcomes'] = {'changed': 'write'}
         self.write_config()
         result = subprocess.run([str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
-                                 'start', '--once'], capture_output=True, text=True)
+                                 'start', '--once', '--no-notifications'], capture_output=True, text=True)
         self.assertNotEqual(0, result.returncode)
         self.assertEqual([], self.jobs())
         self.definition['stages']['review']['outcomes']['passed'] = 'integrate'
@@ -783,6 +783,19 @@ class PipelineTest(unittest.TestCase):
             self.write_config()
             with self.assertRaises(TeamError):
                 self.load_config()
+
+
+    def test_start_requires_explicit_notification_choice_before_launch(self):
+        command = [str(ROOT / 'bin/agentctl-team'), '--config', str(self.config), 'start', '--once']
+        missing = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(2, missing.returncode)
+        self.assertEqual([], self.jobs())
+        both = subprocess.run(command + ['--notify', 'codex:test', '--no-notifications'],
+                              capture_output=True, text=True)
+        self.assertEqual(2, both.returncode)
+        disabled = subprocess.run(command + ['--no-notifications'], capture_output=True, text=True)
+        self.assertEqual(0, disabled.returncode, disabled.stderr)
+        self.assertFalse(self.p.store.load().get('notifications'))
 
 
 

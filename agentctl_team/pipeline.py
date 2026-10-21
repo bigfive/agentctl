@@ -544,7 +544,7 @@ class Pipeline:
                     command = shlex.quote(str(Path(__file__).parents[1] / 'bin' / 'agentctl-team'))
                     prefix = command + ' --config ' + shlex.quote(self.config['_path'])
                     lines += ['Read the backlog:', prefix + ' issue list', '',
-                              'After taking the required action, start the runner again to continue:', prefix + ' start']
+                              'After taking the required action, start the runner again to continue:', prefix + ' start --notify ' + shlex.quote(self.config['notifications']['target'])]
                 notice = self.queue_notification(state, None, None, 'runner-stopped', '\n'.join(lines))
                 record['notification'] = notice
         self.store.event('runner-stopped', run=identifier, reason=reason, error=error)

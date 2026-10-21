@@ -31,11 +31,41 @@ scope. It does not start work. Use the user's chosen model; the starter uses
 Luna with low reasoning effort. Each item retains one branch/worktree across
 fresh LLM sessions. Human stages launch no worker and use no pool slot.
 
-Use a verified native manager session ID, not an app conversation GUID. In a
-Codex execution environment, `CODEX_THREAD_ID` may provide it; verify it belongs
-to the current session. `--notify` is per start invocation. Omission disables
-new alerts; config notification targets are rejected. Existing outbox messages
-retain their recorded targets. Do not redirect old alerts silently.
+## Find the manager session before starting
+
+Notifications are expected. `start` requires either `--notify HARNESS:NATIVE-ID`
+or `--no-notifications`. Do not use the opt-out merely because finding the ID
+is inconvenient. If identification fails, stop and explain the blocker; obtain
+an explicit user choice before running without notifications.
+
+For Codex, first inspect `CODEX_THREAD_ID` in the current execution environment.
+If present, locate the matching rollout file under `${CODEX_HOME:-$HOME/.codex}/sessions`
+and verify its session metadata/current conversation against this task. Do not
+assume a T3 app conversation GUID is a native Codex ID.
+
+If the environment ID is absent, follow the agentctl skill's session-file lookup:
+
+```sh
+ls -t "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl | head -1
+```
+
+The filename ends in the native session UUID. Inspect that file's session
+metadata and recent user messages to confirm it belongs to the CURRENT manager
+conversation. With concurrent sessions the newest file can belong to another
+agent; if it does, inspect other recent candidates. Never pick the newest UUID
+without confirmation, and do not print credentials or full unrelated transcripts.
+Then launch with `--notify codex:VERIFIED_UUID`.
+
+For other harnesses, read the installed `agentctl` skill's matching harness
+section for discovery and push-delivery limitations. Claude does not support
+arbitrary push and Cursor IDE rejects it; do not invent a target or claim wakeup
+support. Resolve that limitation with the user before choosing an explicit
+`--no-notifications` run. OpenCode needs a reachable server owning the session.
+
+`--notify` is per start invocation and must be supplied again on restart. There
+is no silent reuse or automatic guess of a manager ID. Existing outbox messages
+retain their recorded targets; `--no-notifications` disables new messages, not
+previously queued deliveries. Do not redirect old alerts silently.
 
 Launch the runner as a detached process or through a service manager with logs
 retained. A long-lived foreground tool call is not reliable persistence. Keep
