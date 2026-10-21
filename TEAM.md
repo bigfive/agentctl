@@ -23,9 +23,8 @@ worktrees, or backlog items. `--repo` defaults to the current directory;
 `--model` defaults to `gpt-6-luna`. The checked-out branch becomes the explicit
 base branch. Review generated prompts before starting: the starter uses eight
 shared slots, serial integration, low reasoning effort, 30-minute attempt/human
-wait timeouts, and four executions per stage before human overflow. Human retry
-does not reset lifetime counts; increase the configured limit explicitly if a
-stage is exhausted. Per-route count reset is not implemented.
+wait timeouts, and four executions per stage before human overflow. Starter human retry routes explicitly reset the destination-stage count for
+that item, preserving history.
 
 ## A real toy example
 
@@ -315,9 +314,32 @@ stage, `hold`, or `done`. Missing `max` means unlimited executions; no hidden
 limit is applied. `max` without `overflow`, invalid limits/destinations, and
 cycles consisting entirely of overflow routes fail validation.
 
-Limits are lifetime totals for that item/stage, not reset by a human report.
-If a manager routes back to an exhausted stage, it overflows again. Change the
-configuration limit and restart, or route elsewhere; there is no implicit reset.
+Counts accumulate per item/stage until an explicit reset route is taken. String
+routes never reset counts; returning to an exhausted stage via a string will
+overflow again. Outcome routes can instead use an object:
+
+```json
+"manager": {
+  "type": "human",
+  "outcomes": {
+    "review": {"to": "review", "reset_count": true},
+    "implement": {"to": "work", "reset_count": true},
+    "integrate": "integration",
+    "cancel": "done"
+  }
+}
+```
+
+A `review` report resets only the current item's review-stage count, then queues
+a fresh review. Other stages and items are untouched. Attempts/reports are never
+deleted: the ledger records a counting boundary and a count-reset transition,
+including the previous count. It survives restarts. The object requires exactly
+`to` and boolean `reset_count`; false routes without resetting. Resetting `done`
+or `hold` is invalid because they are not stages. Only outcome routes support
+objects; `overflow` and `on_error` remain destination strings. An explicit reset
+can allow repeated cycles beyond the original limit; use it deliberately.
+The starter human stages expose reset-enabled retry/review/implement outcomes,
+plus integrate/cancel. `issue retry` itself still never resets counts.
 
 ## Notifications
 

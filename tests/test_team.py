@@ -695,6 +695,96 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual([], self.jobs())
 
 
+    def reset_workflow(self, route):
+        self.definition['stages']['review'].update(max=1, overflow='manager')
+        self.definition['stages']['manager'] = {'type': 'human', 'outcomes': {'review': route}}
+        self.write_config()
+        self.p = Pipeline(self.load_config())
+
+    def take_to_review_limit(self, item_id):
+        self.p.add(item_id, item_id, 'Body')
+        self.p.tick()
+        self.finish(item_id, 'ready')
+        self.p.tick()
+        self.finish(item_id, 'changed')
+        self.p.tick()
+        self.p.tick()
+        self.assertEqual('waiting-human', self.p.show(item_id)['state'])
+
+    def test_human_route_resets_only_target_stage_for_one_item_and_survives_restart(self):
+        self.reset_workflow({'to': 'review', 'reset_count': True})
+        self.take_to_review_limit('one')
+        self.take_to_review_limit('two')
+        before = self.p.show('one')
+        old_ids = [a['id'] for a in before['history'] + [before['attempt']]]
+        report = self.root / 'reset.md'
+        report.write_text('---\noutcome: review\n---\n\nReview again\n')
+        subprocess.run([str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
+                        'issue', 'report', 'one', '--file', str(report)], check=True, capture_output=True)
+        restarted = Pipeline(self.load_config())
+        item = restarted.show('one')
+        self.assertEqual(0, restarted.executions(item, 'review'))
+        self.assertEqual(1, restarted.executions(item, 'write'))
+        self.assertEqual(1, restarted.executions(restarted.show('two'), 'review'))
+        self.assertEqual(old_ids, [a['id'] for a in item['history'] + [item['attempt']]])
+        self.assertEqual('count-reset', item['transitions'][-1]['kind'])
+        self.assertEqual(1, item['transitions'][-1]['previous_count'])
+        restarted.tick()
+        self.assertEqual('running', restarted.show('one')['state'])
+        self.assertEqual('review', restarted.show('one')['stage'])
+        self.assertEqual(1, restarted.executions(restarted.show('one'), 'review'))
+        self.p = restarted
+        self.finish('one', 'changed')
+        restarted.tick()
+        restarted.tick()
+        self.assertEqual('waiting-human', restarted.show('one')['state'])
+        restarted.human_report('one', report)
+        self.assertEqual(0, restarted.executions(restarted.show('one'), 'review'))
+        self.assertEqual(2, restarted.stage_attempts(restarted.show('one'), 'review'))
+
+    def test_string_and_false_object_routes_do_not_reset_exhausted_stage(self):
+        for route in ('review', {'to': 'review', 'reset_count': False}):
+            self.reset_workflow(route)
+            item_id = 'string' if isinstance(route, str) else 'object'
+            self.take_to_review_limit(item_id)
+            report = self.root / (item_id + '.md')
+            report.write_text('---\noutcome: review\n---\n\nNo reset\n')
+            self.p.human_report(item_id, report)
+            self.assertEqual(1, self.p.executions(self.p.show(item_id), 'review'))
+            self.p.tick()
+            self.p.tick()
+            self.assertEqual('waiting-human', self.p.show(item_id)['state'])
+            self.assertEqual(1, self.p.stage_attempts(self.p.show(item_id), 'review'))
+
+    def test_llm_outcome_route_can_reset_itself(self):
+        self.definition['stages']['review'].update(max=1, overflow='hold')
+        self.definition['stages']['review']['outcomes']['changed'] = {'to': 'review', 'reset_count': True}
+        self.write_config()
+        self.p = Pipeline(self.load_config())
+        self.p.add('one', 'One', 'Body')
+        self.p.tick()
+        self.finish('one', 'ready')
+        self.p.tick()
+        first_job = self.p.show('one')['attempt']['job']
+        self.finish('one', 'changed')
+        self.p.tick()
+        self.assertEqual('running', self.p.show('one')['state'])
+        self.assertNotEqual(first_job, self.p.show('one')['attempt']['job'])
+        self.assertEqual(2, self.p.stage_attempts(self.p.show('one'), 'review'))
+        self.assertEqual(1, self.p.executions(self.p.show('one'), 'review'))
+
+    def test_invalid_outcome_route_objects_fail_validation(self):
+        invalid = [None, {}, {'to': 'review'}, {'to': 'review', 'reset_count': 'true'},
+                   {'to': 'missing', 'reset_count': True}, {'to': 'done', 'reset_count': True},
+                   {'to': 'hold', 'reset_count': True},
+                   {'to': 'review', 'reset_count': True, 'extra': 1}]
+        for route in invalid:
+            self.definition['stages']['write']['outcomes']['ready'] = route
+            self.write_config()
+            with self.assertRaises(TeamError):
+                self.load_config()
+
+
 
 if __name__ == '__main__':
     unittest.main()

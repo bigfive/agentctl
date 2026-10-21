@@ -35,13 +35,25 @@ def positive(value, name):
         raise TeamError(name + ' must be a finite positive number')
 
 
+def route_target(route):
+    if isinstance(route, str) and route:
+        return route
+    if (not isinstance(route, dict) or set(route) != {'to', 'reset_count'} or
+            not isinstance(route['to'], str) or not route['to'] or
+            type(route['reset_count']) is not bool):
+        raise TeamError('route must be a destination string or {to: STAGE, reset_count: BOOLEAN}')
+    if route['reset_count'] and route['to'] in ('done', 'hold'):
+        raise TeamError('reset_count requires a stage destination, not done or hold')
+    return route['to']
+
+
 def validate_routes(stages):
     # Outcomes are worker choices. Detect structurally trapped stages, not
     # whether a worker will eventually choose an available exit.
     escaping = {'done', 'hold'}
     while True:
         reachable = {name for name, stage in stages.items()
-                     if any(target in escaping for target in stage['outcomes'].values())}
+                     if any(route_target(target) in escaping for target in stage['outcomes'].values())}
         reachable |= {name for name, stage in stages.items() if stage.get('type', 'llm') == 'human'}
         reachable |= {name for name, stage in stages.items() if stage.get('overflow') in escaping}
         updated = escaping | reachable
@@ -150,7 +162,7 @@ def config_load(path, notify=None):
         if not isinstance(outcomes, dict) or not outcomes:
             raise TeamError('outcomes must be nonempty')
         for outcome, destination in outcomes.items():
-            if not NAME.fullmatch(outcome) or destination not in {*stages, 'done', 'hold'}:
+            if not NAME.fullmatch(outcome) or route_target(destination) not in {*stages, 'done', 'hold'}:
                 raise TeamError('invalid outcome route in ' + name)
         if kind == 'human':
             continue
@@ -602,11 +614,25 @@ class Pipeline:
                     state['notifications'][identifier].update(state='sent', job=result['job'], sent=time.time())
                 self.store.event('notified', notification=identifier, item=record['item'], job=result['job'])
 
-    def executions(self, item, stage):
+    def stage_attempts(self, item, stage):
         return sum(attempt['stage'] == stage for attempt in item['history'] +
                    ([item['attempt']] if item['attempt'] else []))
 
-    def route(self, state, item, destination):
+    def executions(self, item, stage):
+        # Old ledgers without reset boundaries retain their lifetime counts.
+        boundary = item.get('count_resets', {}).get(stage, 0)
+        return self.stage_attempts(item, stage) - boundary
+
+    def route(self, state, item, route):
+        destination = route_target(route)
+        if isinstance(route, dict) and route['reset_count']:
+            before = self.executions(item, destination)
+            boundary = self.stage_attempts(item, destination)
+            item.setdefault('count_resets', {})[destination] = boundary
+            item.setdefault('transitions', []).append(dict(
+                kind='count-reset', stage=item['stage'], destination=destination,
+                reason='Reset execution count for ' + destination + ' from ' + str(before) + ' to zero.',
+                previous_count=before, boundary=boundary, at=time.time()))
         if destination == 'hold':
             item['state'] = 'held'
             self.attention(state, item, 'held', 'Workflow routed this item to hold.')

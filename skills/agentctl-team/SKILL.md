@@ -87,10 +87,12 @@ in error. Unknown launch/status state retains ownership: do not launch a second
 worker until reconciled. Preserve worktrees and original errors; do not reset,
 stash, delete, or silently repair user work.
 
-Stage `max` counts lifetime executions per item/stage; `overflow` routes before
-another execution. `issue retry` does not reset that count. Per-route resets and
-per-item manual stage moves are not implemented. Do not change shared policy
-as though it affects only one item.
+Stage `max` counts executions per item/stage since its last explicit reset;
+`overflow` routes before another execution. String outcome routes preserve counts.
+`{"to":"review","reset_count":true}` resets only this item's destination-stage
+count and preserves all history. Choose a configured reset-enabled human outcome
+when another attempt is appropriate, rather than changing shared policy for one
+item. `issue retry` does not reset counts. Manual stage moves are not implemented.
 
 Git ignore rules do not prevent force-added or already tracked runtime files.
 Keep the starter's integration check for tracked `.agentctl-team` files before

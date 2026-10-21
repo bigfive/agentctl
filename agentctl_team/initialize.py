@@ -57,7 +57,11 @@ def initialize(config_path, repo, model):
                                 timeout_seconds=1800, worker={'harness': 'codex', 'model': model,
                                 'options': {'reasoning_effort': 'low'}}, files=str(files.relative_to(config_path.parent)),
                                 outcomes=outcomes, on_error='human_' + name, max=4, overflow='human_' + name)
-            stages['human_' + name] = {'type': 'human', 'outcomes': {'retry': name}}
+            stages['human_' + name] = {'type': 'human', 'outcomes': {
+                'retry': {'to': name, 'reset_count': True},
+                'review': {'to': 'review', 'reset_count': True},
+                'implement': {'to': 'work', 'reset_count': True},
+                'integrate': 'integration', 'cancel': 'done'}}
         config = dict(repo=str(repo), base_branch=branch, agentctl=binary,
                       worktrees=str(Path.home() / '.agentctl-team/worktrees' / __import__('hashlib').sha256(str(repo).encode()).hexdigest()[:12]),
                       poll_seconds=2, pools={'agents': 8, 'integration': 1}, entry='work', stages=stages,
@@ -70,4 +74,4 @@ def initialize(config_path, repo, model):
         # Leave partial artifacts visible for inspection; never hide a failed init.
         raise
     return {'config': str(config_path), 'stage_files': str(directory), 'base_branch': branch,
-            'note': 'Review the generated prompts and limits before start. Human retry does not reset lifetime stage counts.'}
+            'note': 'Review the generated prompts and limits before start. Human retry resets this item destination-stage execution count; report history is preserved.'}
