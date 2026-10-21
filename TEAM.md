@@ -1,0 +1,453 @@
+# agentctl-team
+
+A separate application in this repository, using agentctl's public CLI as its
+worker backend. It runs configurable stages over a local backlog. It does not
+implement delivery policy, inspect commit SHAs, run checks, merge, or close an
+external tracker item. Configure workers and scripts to do those things.
+
+Python 3 and Git are required. No third-party Python dependencies are used.
+Configuration is JSON; YAML is not currently supported. The existing
+`bin/agentctl-team` entry point is independent of agentctl's daemon internals.
+
+## Initialize a project
+
+```sh
+agentctl-team --config /path/to/pipeline.json init --repo /path/to/repository
+agentctl-team --config /path/to/pipeline.json doctor
+agentctl-team --config /path/to/pipeline.json start --notify codex:NATIVE-SESSION-ID
+```
+
+The config parent directory must exist. `init` creates the config and a sibling
+`pipeline-stages/` directory, refusing to overwrite either. It creates no jobs,
+worktrees, or backlog items. `--repo` defaults to the current directory;
+`--model` defaults to `gpt-6-luna`. The checked-out branch becomes the explicit
+base branch. Review generated prompts before starting: the starter uses eight
+shared slots, serial integration, low reasoning effort, 30-minute attempt/human
+wait timeouts, and four executions per stage before human overflow. Human retry
+does not reset lifetime counts; increase the configured limit explicitly if a
+stage is exhausted. Per-route count reset is not implemented.
+
+## A real toy example
+
+Run from this checkout:
+
+```sh
+python3 examples/poems/create.py /tmp/my-poem-pipeline
+bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json doctor
+bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json issue add \
+  --id rain --title 'Rain poem' --body-file /tmp/my-poem-pipeline/rain.md
+bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json issue add \
+  --id ocean --title 'Ocean poem' --body-file /tmp/my-poem-pipeline/ocean.md
+bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json start
+```
+
+This starts real Codex workers through the installed agentctl. Each item gets
+one branch and worktree. Writers leave poems uncommitted. New reviewer sessions
+read those same files. Integration workers commit and merge into the disposable
+main checkout, one at a time. The integration brief explicitly supplies that
+Git policy; the engine does not perform it.
+
+Inspect the main checkout's `poems/`, the item worktrees, and
+`repo/.git/agentctl-team/state.json`. Worktrees and branches are retained after
+completion for inspection; cleanup is manual.
+
+## Definition
+
+All top-level fields below are required. Notification destinations are supplied with `start --notify`, not stored in
+the workflow config. Omitting it disables new alerts for that invocation. Stage `type` is optional and defaults to `llm` for
+compatibility with existing configurations; `human` must be explicit. Paths are relative to the config file
+unless absolute. `model: null` explicitly selects the harness's default model.
+Timeouts and polling intervals are finite positive seconds. Pool capacities are
+positive integers.
+
+```json
+{
+  "repo": "/absolute/project",
+  "base_branch": "main",
+  "agentctl": "/absolute/bin/agentctl",
+  "worktrees": "/absolute/worktrees",
+  "poll_seconds": 1,
+  "entry": "write",
+  "launch_message": "Read .agentctl-team/brief.md and follow its instructions.",
+  "pools": {"agents": 8, "integration": 1},
+  "stages": {
+    "write": {
+      "pools": ["agents"],
+      "timeout_seconds": 1800,
+      "worker": {"harness": "codex", "model": null},
+      "files": "stages/write",
+      "outcomes": {"ready": "integration", "blocked": "hold"}
+    },
+    "integration": {
+      "pools": ["agents", "integration"],
+      "timeout_seconds": 1800,
+      "worker": {"harness": "codex", "model": null},
+      "files": "stages/integration",
+      "outcomes": {"complete": "done", "blocked": "hold"}
+    }
+  }
+}
+```
+
+A pool is a named counting semaphore. A run acquires one slot from every named
+pool atomically, and holds those slots until its worker terminates. Queued and
+held items consume no slots. One item has at most one active run. There is no
+batch join. Queues are currently unbounded: pools constrain active runs, not
+queue lengths. Items with more completed attempts are dispatched first, then
+priority and arrival order. Self-routing review loops are permitted; this
+version supports explicit per-stage execution limits. Startup rejects stages
+with no route to `done`, `hold`, or a human stage, including closed cycles.
+Configured overflow routes also count as exits. A review loop with an exit is
+valid; static validation cannot prove that workers will choose it.
+
+## Worker options
+
+`worker.options` is optional. When absent, no explicit overrides are requested;
+the harness's configuration applies. `{}` requests no overrides. Currently
+Codex supports:
+
+```json
+{
+  "harness": "codex",
+  "model": "gpt-6-luna",
+  "options": {"reasoning_effort": "low", "service_tier": "priority"}
+}
+```
+
+`reasoning_effort` accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+`max`; `service_tier` accepts `auto`, `default`, `flex`, or `priority`. The selected
+Codex model/provider must also support the chosen value; a native rejection is
+an execution error, never a fallback. Other harnesses currently reject nonempty
+options explicitly. Options are passed through agentctl's public
+`--options-json` interface and validated through its public `validate-options`
+command. An old agentctl executable or daemon fails visibly rather than ignoring
+requested options. Restart an older daemon separately before requesting them.
+
+The recorded attempt contains the options used. Every LLM execution starts a
+new session. Agentctl-team does not use agentctl follow-ups.
+
+## Prepared files and prompts
+
+Each stage directory must contain UTF-8 `brief.md`, `report.md`, executable
+`read-issue.sh`, and executable `submit-report.sh`. Additional files and nested
+directories are allowed. Symlinks are rejected. Source executable bits are
+preserved. Everything is rendered into the item's `.agentctl-team/` before the
+worker launches. No instructions are silently appended to the launch message.
+
+Templates use `{{ name }}` with these explicit variables:
+
+- `item_id`, `title`, `stage`, `attempt`, `worktree`, `branch` are literal values.
+- `team_command` is the shell-quoted installed team entry point.
+- `config_path` is the shell-quoted configuration path.
+
+Unknown variables and malformed expressions fail validation. Literal values
+are not automatically shell-escaped; use them as text, and do not interpolate
+untrusted titles into shell commands. The generated IDs are restricted to
+letters, digits, underscores and hyphens. The example uses only restricted IDs
+in shell arguments.
+
+A read script can be:
+
+```sh
+#!/bin/sh
+set -eu
+{{ team_command }} --config {{ config_path }} issue show {{ item_id }}
+```
+
+It reads the **live** local backlog item, including edits made during a run.
+There is no snapshot/version protocol. `issue show` returns JSON.
+
+A submission script can be:
+
+```sh
+#!/bin/sh
+set -eu
+{{ team_command }} --config {{ config_path }} report \
+  --attempt {{ attempt }} --file .agentctl-team/report.md
+```
+
+The standard report template is:
+
+```markdown
+---
+outcome: <replace-with-outcome>
+---
+
+Replace this text with your findings, work completed, and any blockers.
+```
+
+The front matter must contain exactly `outcome: NAME`, with an unquoted declared
+outcome. The remaining Markdown is uninterpreted text. No SHA, acceptance,
+checks, or findings fields are required. An unchanged placeholder fails.
+Arbitrary report schemas and extra front-matter fields are not supported in
+this first implementation.
+
+Reports are durably recorded under a state lock. Identical repeat submissions
+return the original receipt; conflicting submissions fail. Old attempt tokens
+cannot submit for a newer attempt. Tokens identify attempts; they are not an
+OS security boundary.
+
+Submission does not cancel the worker or release slots. Routing happens only
+after successful worker termination and a valid report. The configured brief
+must tell workers to stop after submission. A failed run with a report still
+fails. No post-run Git validation is implicit.
+
+## Lifecycle and commands
+
+```sh
+agentctl-team --config FILE start                 # run until settled
+agentctl-team --config FILE start --daemon        # remain available for new items
+agentctl-team --config FILE start --once          # one scheduler tick
+agentctl-team --config FILE doctor
+agentctl-team --config FILE status                # JSON
+agentctl-team --config FILE pause
+agentctl-team --config FILE resume
+agentctl-team --config FILE stop --drain
+agentctl-team --config FILE stop --cancel-active
+
+agentctl-team --config FILE issue add --id ID --title TITLE --body-file FILE
+agentctl-team --config FILE issue add --id ID --title TITLE --body-file FILE --dep OTHER
+agentctl-team --config FILE issue list                 # compact table
+agentctl-team --config FILE issue list --json          # full records
+agentctl-team --config FILE issue show ID
+agentctl-team --config FILE issue edit ID --body-file FILE
+agentctl-team --config FILE issue edit ID --title TITLE --priority 1
+agentctl-team --config FILE issue edit ID --dep OTHER --dep ANOTHER
+agentctl-team --config FILE issue edit ID --clear-deps
+agentctl-team --config FILE issue report ID --file REPORT.md
+agentctl-team --config FILE issue retry ID
+```
+
+Optional add arguments: priority defaults to 2 (lower first); dependencies
+default to none. Known unmet dependencies wait before worktree preparation.
+Priorities range from 0 to 4. Dependencies must identify existing items.
+Editing with `--dep` replaces the complete dependency list; `--clear-deps` removes
+it. Cycles, missing dependencies, and duplicates are rejected atomically.
+Dependencies can change only while an item is queued, waiting for a human,
+held, or in error; the
+runner does not retroactively apply them to active or completed work. Title,
+body, and priority edits are live. At least one edit field is required.
+
+Routing to `hold` retains the stage and worktree without dispatching anything.
+Use an explicit human stage for discussion and resolution. `issue retry` can
+rerun held or failed LLM work after the cause is resolved; it always starts a
+new session and preserves the branch and worktree. Human stages cannot be
+retried this way: submit a human report instead. The old `issue resume` and
+answer-file mechanism have been removed. Existing pending legacy continuations
+are rejected explicitly, not silently reinterpreted.
+
+Operational errors (missing report, failed worker, malformed preparation) hold
+as `error`, separately from a worker's declared `hold` outcome. No automatic
+retry or substituted outcome is used. A timeout cancels the worker and waits
+for its terminal status before releasing capacity and marking the item as an
+error. Status failures stop the scheduler with a visible error while retaining
+active ownership. Errors identify the item, stage, worktree, branch, and
+recorded job/attempt where available. Preparation errors include paths to
+inspect; nothing is silently cleaned up or repaired. Inspect the cause and
+restart to reconcile.
+
+A plain `stop` exits the scheduler while retaining active jobs for a later
+restart. `--drain` observes existing runs without launching new ones.
+`--cancel-active` cancels runs and observes their termination. SIGINT/SIGTERM
+exit without killing workers. A subsequent `start` clears the stop request.
+A paused runner remains paused until `resume`.
+
+## Human stages and execution limits
+
+A human stage has no worker, pool, files, or timeout:
+
+```json
+"manager": {
+  "type": "human",
+  "outcomes": {"clarified": "review", "needs_changes": "work"}
+}
+```
+
+A worker can route any declared outcome to it, including `"blocked": "manager"`.
+The name `blocked` has no special meaning to the runner. On entering a human
+stage, the item becomes `waiting-human`, a stage attempt is recorded, and no
+worker slot is acquired. A worktree is created only when the first LLM stage
+runs. The runner stays alive while human input is pending and no LLM work is runnable
+or active. `human_wait_timeout_seconds` defaults to 1800 (30 minutes); configure
+a positive number to change it, or `null` to wait indefinitely. A report making
+work runnable clears the idle timer. If the timeout elapses, the runner exits
+and sends a stop alert explicitly stating that the human-wait timeout elapsed.
+Items and reports remain intact. This timeout also applies to `--daemon`;
+explicit stop/drain/cancel and execution errors take precedence.
+
+Edit the live issue if needed, then submit the same Markdown report format:
+
+```sh
+agentctl-team --config FILE issue report ID --file clarification.md
+```
+
+```markdown
+---
+outcome: clarified
+---
+
+A title is not required. Keep exactly four nonempty lines.
+```
+
+The report command validates the current human stage's outcome, records the
+report, and routes the item atomically. No token or instructions file is needed
+from the person. It fails if the item is not waiting at a human stage. It does
+not launch a worker itself; an active runner, or the next `start`, dispatches
+the next stage. Each LLM execution, including a return from a human stage,
+starts fresh and reads the issue/report history. Human reports are included in
+`issue show` just like worker reports. This command is not a duplicate-safe
+network API: repeating it after routing fails rather than targeting an old
+human attempt.
+
+An optional limit must include an explicit overflow destination:
+
+```json
+"max": 3,
+"overflow": "manager"
+```
+
+Limits count prepared executions per item, per stage, across all visits and
+retries. Failed attempts count. Human-stage entries count too. An interrupted
+launch recovered with the same attempt identifier does not count twice. Before
+execution four, the runner records an overflow transition and routes to the
+configured destination without launching a worker. The destination can be any
+stage, `hold`, or `done`. Missing `max` means unlimited executions; no hidden
+limit is applied. `max` without `overflow`, invalid limits/destinations, and
+cycles consisting entirely of overflow routes fail validation.
+
+Limits are lifetime totals for that item/stage, not reset by a human report.
+If a manager routes back to an exhausted stage, it overflows again. Change the
+configuration limit and restart, or route elsewhere; there is no implicit reset.
+
+## Notifications
+
+`start` prints manager guidance to stderr immediately after startup validation,
+with flushing so it is visible even when output is captured. Its stdout remains
+JSON. With notifications enabled, the guidance tells an LLM manager to end its
+turn when it has no other work, rather than polling or waiting for queued
+notifications. On receipt, read the issue/history, act, and end the turn again.
+`start --daemon` also warns that it stays running and should be launched as a
+background process or service, rather than awaited inside a manager turn.
+
+Enable notifications for each runner invocation:
+
+```sh
+agentctl-team --config pipeline.json start --notify codex:NATIVE-SESSION-ID
+```
+
+Specify it again on restart; no previous destination is silently reused.
+Old `notifications` config fields fail with a migration error. Already-recorded
+notifications retain their original destination and delivery state.
+
+The runner records an outgoing notification when an item enters a human stage,
+routes to `hold`, or encounters an operational error. Normal stage completions
+do not send alerts. Messages begin with `[Message from: 'agentctl-team STAGE']`, identifying the
+stage that requested attention. Human handoffs quote that stage's report prose
+without routing front matter, explain what to do next, and include inspection
+and submission commands. Overflow alerts identify the stage that reached its
+limit. Execution errors retain the original error and diagnostic context.
+A native harness session ID is required; a T3 conversation ID is not assumed to
+be one. Transport support and user-visible delivery depend on that harness.
+A successful `agentctl notify` confirms transport acceptance, not a human read. Notification messages use a plain-text code block so report Markdown and YAML separators cannot become headings.
+
+Every runner invocation records its start and stop under `runs` in the state
+file. With notifications enabled it attempts a separate runner-stopped message
+before exiting, including backlog completion, waiting for human/held work,
+requested stop, completed drain/cancellation, diagnostic `--once` exit,
+SIGINT/SIGTERM, and handled runtime or startup-validation errors. The message
+identifies any workers still running and tells the manager to restart the
+runner after resolving outstanding work. A second stop call for the same run
+does not create another alert. SIGKILL, process/machine crashes, invalid config
+that cannot be loaded, and failure to acquire the scheduler lock cannot reliably
+send a stop notification. No external supervisor is installed.
+
+Stop-alert failures are recorded and exit nonzero. An existing failed alert is
+not retried merely to send the separate runner-stopped alert. If both the runner
+and its stop notification fail, stderr preserves both errors.
+
+State includes a durable notification outbox. Each message has a stable ID and
+moves through pending → sending → sent. It is not resent on each status poll or
+restart. A transport failure records `failed`; a crash during delivery records
+`uncertain` on restart. Both stop the scheduler loudly because delivery may
+already have happened. No automatic resend is attempted.
+
+```sh
+agentctl-team --config FILE notification list
+agentctl-team --config FILE notification acknowledge NOTICE_ID \
+  --note "Inspected recipient and agentctl delivery records; handled manually"
+```
+
+Acknowledgement records the operator's resolution; it does not resend the
+message, resolve the item, or clear an execution error. Inspect the recipient
+and transport records before manually sending anything again. Pending/sent
+messages retain the target recorded when created even if config changes later.
+
+## Human-handoff example
+
+`examples/human-handoff/create.py NEW_DIRECTORY`
+creates a Luna-only example. Add `rain` using its `pipeline.json` and `rain.md`;
+add `limit` using its `overflow-pipeline.json`. Both definitions use the same
+local backlog. The main definition includes every stage and runs both items.
+The rain item follows write → review → manager → review → integration. The
+limit item runs `loop` once, then overflows into `escalation`. Prepared manager
+and overflow reports are supplied in the example directory. Run the scheduler with `start --notify HARNESS:NATIVE-ID`,
+inspect the waiting items, submit each human report with `issue report`, then
+start again. Use an explicitly isolated `AGENTCTL_HOME` for the test if needed;
+do not restart the shared daemon implicitly.
+
+## Validation and persistence
+
+`start` checks stage files, routes, pools, required values, the Git base branch,
+executable availability, reserved directory collisions, dependency cycles,
+stages trapped without an exit, and the scheduler lock.
+It configures `/.agentctl-team/` in the repository's Git exclude file.
+`doctor` performs the same checks and exclusion setup without starting workers.
+A tracked or existing `.agentctl-team` in the root checkout is an error.
+
+The ledger is in the common Git directory's `agentctl-team/`:
+
+- `state.json`: atomic state document under `state.lock`.
+- `scheduler.lock`: exclusive runner ownership.
+- `events.jsonl`: operational event log; the state document is authoritative.
+- `attempts/<token>/`: recorded definition, rendered launch prompt and initial
+  prepared files. The next attempt also archives the previous worker files.
+
+Running attempts retain their recorded stage definition and routing. Edited
+configurations are loaded on the next CLI invocation/restart; a resident runner
+does not hot-reload them. Templates are rendered when a new attempt is prepared.
+Do not remove pools/stages still referenced by unfinished items.
+
+Launches use agentctl's public `--request-id`, stable across recovery. An
+interrupted launch retries the same request ID; agentctl either returns the
+existing job or reports an ambiguous launch explicitly. Interrupted worktree
+or file preparation requires inspection and explicit retry; existing paths
+are not overwritten silently. Existing legacy delivery-queue state is rejected
+rather than reinterpreted. There is no automatic migration.
+
+## Boundaries and current limits
+
+Workers have the permissions of the user. Worktrees and prepared scripts are
+coordination tools, not a sandbox. Generated files can be edited by workers.
+The runner does not inspect commits to enforce their exclusion.
+
+This version has a local backlog, not an external tracker adapter. External
+tracker commands can be configured in scripts, but automatic external backlog
+intake is not implemented. There are no generic
+validation hooks, bounded queues, automatic cleanup,
+or automatic repair policies. They are not necessary for the toy pipeline.
+
+Test this application independently:
+
+```sh
+python3 -m unittest discover -s tests -p test_team.py
+```
+
+Those tests use real Git and a controlled agentctl CLI dependency. The poems
+example exercises the application with real LLM workers.
+
+LLM stages may configure `"on_error": "manager"` (or another stage/`hold`).
+Terminal failed/cancelled runs, missing reports, and preparation errors retain
+the original error in attempt/item history and route there without inventing
+a report. With no `on_error`, the item stays in error as before. Uncertain
+launches or status failures retain active ownership and stop loudly; they do
+not route while a worker may still be running.

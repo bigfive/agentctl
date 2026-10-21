@@ -17,11 +17,12 @@ harness it finds, so each agent already knows how to use it. Both are
 symlinks, so `git pull` updates them.
 
 ```bash
-./install.sh --cli        # the command only
+./install.sh --cli        # both commands only
 ./install.sh --skills     # the skill only
 ./install.sh --opencode-plugin  # optional native OpenCode `agentctl` tool
 ./install.sh --uninstall  # remove both; the job store is left alone
 agentctl daemon status    # confirm it works
+agentctl-team --help      # delivery scheduler
 ```
 
 ## Quick start
@@ -60,19 +61,37 @@ full: agentctl read job_9f2c11a7e4d0
 ## Commands
 
 ```text
-agentctl start <harness> <prompt> [--cwd DIR] [--model M]
+agentctl start <harness> <prompt> [--cwd DIR] [--model M] [--request-id ID]
 agentctl asyncwait <job> --notify <harness>:<session-id>
 agentctl wait <job>... [--rewake] [--timeout SECONDS] [--json]
 agentctl status <job>
 agentctl read <job> [--stream | --stderr]
-agentctl followup <job> <prompt>
+agentctl followup <job> <prompt> [--request-id ID]
 agentctl cancel <job>
 agentctl list
 agentctl daemon status|start|stop|run
+agentctl notify <harness>:<session-id> (--message TEXT | --message-file FILE) [--id ID] [--json]
+agentctl-team --config FILE start
 ```
 
 `start` prints only the job handle, so `a=$(agentctl start ...)` captures it
 exactly. Add `--json` to most commands for the full record.
+
+`start` and `followup` accept `--options-json` for explicit harness options.
+For Codex, `{"reasoning_effort":"low","service_tier":"priority"}` maps to native
+configuration overrides. Unsupported keys, values, or harnesses fail before
+launch. `agentctl validate-options codex --options-json '{"reasoning_effort":"low"}'`
+validates without launching. Follow-up inherits the previous job's options when
+omitted; `{}` clears them. Older running daemons must be restarted before using
+this interface; the CLI rejects them explicitly.
+
+`notify` targets an existing native session directly. It tracks the transport
+acceptance as a `session_delivery` job; `status` reports `succeeded` when the
+harness accepts the message, not when the recipient responds. Supplying `--id`
+makes identical retries return the same job and rejects changed message content.
+The receiver may still deliver ambiguously on transport failure, so agentctl
+never retries a failed or ambiguous send automatically. `--message-file` reads
+UTF-8 text; `--message` handles short messages.
 
 Three identifiers exist and are never interchangeable: the agentctl job handle
 (`job_...`), the wait handle (`wait_...`), and the harness's own session id.
@@ -213,3 +232,11 @@ python3 -m unittest discover -s tests
 
 The suite drives the real CLI, socket, and job store. Harness binaries are
 replaced via the `AGENTCTL_*_BIN` overrides, so no agent credits are spent.
+
+## Deterministic delivery scheduler
+
+`agentctl-team` is a separate application in this repository. It runs configurable
+LLM stages over backlog items through agentctl's public CLI. Each item keeps one
+branch and worktree across stages; prompts, prepared scripts, pools and outcome
+routes are configured explicitly. Read [TEAM.md](TEAM.md) for configuration,
+reporting, recovery and the real-worker poem example.

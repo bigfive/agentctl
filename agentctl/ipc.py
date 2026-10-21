@@ -18,7 +18,7 @@ import threading
 import time
 
 from . import config, store
-from .errors import AgentctlError, DaemonUnavailableError
+from .errors import AgentctlError, DaemonUnavailableError, UsageError
 
 CONNECT_TIMEOUT = 5
 CALL_TIMEOUT = 300
@@ -94,25 +94,31 @@ def dispatch(daemon, request):
     op = request.get("op")
     try:
         if op == "ping":
-            return {"ok": True, "data": {"pid": os.getpid()}}
+            return {"ok": True, "data": {"pid": os.getpid(), "worker_options": True}}
         if op == "start":
             record = daemon.start_job(
                 request["harness"], request.get("prompt") or "",
-                request.get("cwd"), request.get("model"))
+                request.get("cwd"), request.get("model"), request_id=request.get("request_id"),
+                options=request.get("options"))
             return {"ok": True, "data": record}
         if op == "followup":
             record = store.read(request["job"])
+            if not store.is_terminal(record):
+                raise UsageError("cannot follow up an active job")
             native = record.get("native_session_id")
             if not native:
                 from .errors import UnsupportedOperationError
-                raise UnsupportedOperationError(
-                    "job %s has no native session id, so it cannot take a "
-                    "follow-up" % record["job"])
+                raise UnsupportedOperationError("job has no native session id")
             child = daemon.start_job(
-                record["harness"], request.get("prompt") or "",
-                record["cwd"], record.get("model"),
-                followup_of=record["job"], session_id=native)
+                record["harness"], request["prompt"], record["cwd"],
+                record.get("model"), followup_of=record["job"],
+                session_id=native, request_id=request.get("request_id"),
+                options=request["options"] if "options" in request else record.get("options"))
             return {"ok": True, "data": child}
+        if op == "notify":
+            delivery = daemon.deliver_session(request["target"], request["message"],
+                                               request.get("request_id"))
+            return {"ok": True, "data": delivery}
         if op == "asyncwait":
             wait = daemon.register_wait(request["job"], request["notify"])
             return {"ok": True, "data": wait}

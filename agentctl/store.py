@@ -87,7 +87,7 @@ def lock_for(job_id):
 
 
 def create(harness, prompt, cwd, command, model=None, followup_of=None,
-           native_session_id=None):
+           native_session_id=None, kind=None):
     """Create a new job record in ``pending`` and return it."""
     job_id = ids.new_job_id()
     os.makedirs(config.job_dir(job_id), exist_ok=True)
@@ -113,6 +113,8 @@ def create(harness, prompt, cwd, command, model=None, followup_of=None,
         "stderr": stderr_path(job_id),
         "result": result_path(job_id),
     }
+    if kind is not None:
+        record["kind"] = kind
     with lock_for(job_id):
         _atomic_write_json(record_path(job_id), record)
     return record

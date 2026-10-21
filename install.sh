@@ -17,6 +17,7 @@ set -eu
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
 NAME=agentctl
+TEAM=agentctl-team
 DO_CLI=yes
 DO_SKILLS=yes
 DO_OPENCODE_PLUGIN=no
@@ -100,11 +101,13 @@ if [ "$UNINSTALL" = yes ]; then
         echo "removed  $plugin_bin"
     fi
     for dir in "$HOME/.local/bin" /usr/local/bin /opt/homebrew/bin; do
-        link="$dir/$NAME"
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$ROOT/bin/$NAME" ]; then
-            rm "$link"
-            echo "removed  $link"
-        fi
+        for command in "$NAME" "$TEAM"; do
+            link="$dir/$command"
+            if [ -L "$link" ] && [ "$(readlink "$link")" = "$ROOT/bin/$command" ]; then
+                rm "$link"
+                echo "removed  $link"
+            fi
+        done
     done
     echo "The job store at ${AGENTCTL_HOME:-$HOME/.agentctl} was left alone."
     exit 0
@@ -132,7 +135,9 @@ if [ "$DO_CLI" = yes ]; then
         exit 75
     fi
     ln -sf "$ROOT/bin/$NAME" "$bindir/$NAME"
+    ln -sf "$ROOT/bin/$TEAM" "$bindir/$TEAM"
     echo "installed $bindir/$NAME"
+    echo "installed $bindir/$TEAM"
 fi
 
 if [ "$DO_SKILLS" = yes ]; then

@@ -224,3 +224,26 @@ report that rather than assuming the work was lost.
 Children run **fully permissive**: no approval prompts, no sandbox. A child can
 run any command in the working directory you give it. Only delegate work the
 user asked for, and pass a `--cwd` that matches the task.
+
+### Send an arbitrary message to a known native session
+
+Use `notify` when you know a session id but do not have an agentctl job handle
+for it. Unlike `followup <job>`, this does not create a tracked worker turn; it
+tracks only whether the harness accepted the message.
+
+```bash
+agentctl notify codex:<native-session-id> --message "Please answer the blocker on ticket tc-abc." --id tc-abc-blocker-answer-1
+agentctl notify opencode:<session-id> --message-file /path/to/message.md --json
+```
+
+Use a stable `--id` when the caller may retry after losing its response. The
+same id and same content return the existing delivery job; reusing an id with
+different content fails. A transport failure after the message was accepted
+but before agentctl recorded it can be ambiguous. Agentctl records that state
+and never retries it automatically; inspect `agentctl list`, `status`, and the
+recipient conversation before taking any manual recovery action.
+
+`agentctl start` and `agentctl followup` also accept `--request-id`. Reusing an
+identical completed request returns the existing job. A launch interrupted in
+the gap after recording intent fails as ambiguous rather than launching the
+same task a second time.

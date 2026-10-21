@@ -34,6 +34,15 @@ class ChildAdapter(object):
     def followup_command(self, session_id, cwd, model, result_file):
         raise NotImplementedError
 
+    def option_args(self, options):
+        """Validate explicit worker options and return native argument overrides."""
+        from ..errors import UsageError
+        if not isinstance(options, dict):
+            raise UsageError('worker options must be a JSON object')
+        if options:
+            raise UsageError('worker options are not supported for ' + self.harness)
+        return []
+
     def read_event(self, event):
         """Translate one parsed stream event into an outcome fragment.
 
