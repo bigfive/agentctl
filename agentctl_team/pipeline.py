@@ -1,4 +1,4 @@
-"""Configurable queues of agentctl runs. No delivery or commit policy."""
+"""Schedule agentctl runs through configured stages, pools, and outcome routes."""
 import json
 import math
 import os

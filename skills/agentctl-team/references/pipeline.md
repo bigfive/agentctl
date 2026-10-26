@@ -1,13 +1,11 @@
 # agentctl-team
 
-A separate application in this repository, using agentctl's public CLI as its
-worker backend. It runs configurable stages over a local backlog. It does not
-implement delivery policy, inspect commit SHAs, run checks, merge, or close an
-external tracker item. Configure workers and scripts to do those things.
+`agentctl-team` runs configurable stages over a local backlog through agentctl's
+public CLI. Stage prompts and scripts define the work performed; pools and
+outcome routes control concurrency and progression.
 
-Python 3 and Git are required. No third-party Python dependencies are used.
-Configuration is JSON; YAML is not currently supported. The existing
-`bin/agentctl-team` entry point is independent of agentctl's daemon internals.
+Requires Python 3 and Git, using only the Python standard library.
+Configuration files use JSON. Run it through `bin/agentctl-team`.
 
 ## Initialize a project
 
@@ -18,15 +16,14 @@ agentctl-team --config /path/to/pipeline.json start --notify codex:NATIVE-SESSIO
 ```
 
 The config parent directory must exist. `init` creates the config and a sibling
-`pipeline-stages/` directory, refusing to overwrite either. It creates no jobs,
-worktrees, or backlog items. `--repo` defaults to the current directory;
+`pipeline-stages/` directory, refusing to overwrite either. `--repo` defaults to the current directory;
 `--model` defaults to `gpt-6-luna`. The checked-out branch becomes the explicit
 base branch. Review generated prompts before starting: the starter uses eight
 shared slots, serial integration, low reasoning effort, 30-minute attempt/human
 wait timeouts, and four executions per stage before human overflow. Starter human retry routes explicitly reset the destination-stage count for
 that item, preserving history.
 
-## A real toy example
+## Poem pipeline example
 
 Run from this checkout:
 
@@ -43,8 +40,7 @@ bin/agentctl-team --config /tmp/my-poem-pipeline/pipeline.json start --notify co
 This starts real Codex workers through the installed agentctl. Each item gets
 one branch and worktree. Writers leave poems uncommitted. New reviewer sessions
 read those same files. Integration workers commit and merge into the disposable
-main checkout, one at a time. The integration brief explicitly supplies that
-Git policy; the engine does not perform it.
+main checkout, one at a time, following the integration brief.
 
 Inspect the main checkout's `poems/`, the item worktrees, and
 `repo/.git/agentctl-team/state.json`. Worktrees and branches are retained after
@@ -90,11 +86,10 @@ positive integers.
 
 A pool is a named counting semaphore. A run acquires one slot from every named
 pool atomically, and holds those slots until its worker terminates. Queued and
-held items consume no slots. One item has at most one active run. There is no
-batch join. Queues are currently unbounded: pools constrain active runs, not
-queue lengths. Items with more completed attempts are dispatched first, then
-priority and arrival order. Self-routing review loops are permitted; this
-version supports explicit per-stage execution limits. Startup rejects stages
+held items consume no slots. One item has at most one active run. Queues are
+unbounded; pools constrain active runs. Items with more completed attempts are
+dispatched first, then priority and arrival order. Review loops can route back
+to the same stage and use per-stage execution limits. Startup rejects stages
 with no route to `done`, `hold`, or a human stage, including closed cycles.
 Configured overflow routes also count as exits. A review loop with an exit is
 valid; static validation cannot prove that workers will choose it.
@@ -123,7 +118,7 @@ command. An old agentctl executable or daemon fails visibly rather than ignoring
 requested options. Restart an older daemon separately before requesting them.
 
 The recorded attempt contains the options used. Every LLM execution starts a
-new session. Agentctl-team does not use agentctl follow-ups.
+new session.
 
 ## Prepared files and prompts
 
@@ -131,9 +126,9 @@ Each stage directory must contain UTF-8 `brief.md`, `report.md`, executable
 `read-issue.sh`, and executable `submit-report.sh`. Additional files and nested
 directories are allowed. Symlinks are rejected. Source executable bits are
 preserved. Everything is rendered into the item's `.agentctl-team/` before the
-worker launches. No instructions are silently appended to the launch message.
+worker launches. `launch_message` is rendered from the configured template.
 
-Templates use `{{ name }}` with these explicit variables:
+Templates use `{{ name }}` with these variables:
 
 - `item_id`, `title`, `stage`, `attempt`, `worktree`, `branch` are literal values.
 - `team_command` is the shell-quoted installed team entry point.
@@ -153,8 +148,8 @@ set -eu
 {{ team_command }} --config {{ config_path }} issue show {{ item_id }}
 ```
 
-It reads the **live** local backlog item, including edits made during a run.
-There is no snapshot/version protocol. `issue show` returns JSON.
+`issue show` returns the current local backlog item as JSON, including edits
+made during a run.
 
 A submission script can be:
 
@@ -176,10 +171,8 @@ Replace this text with your findings, work completed, and any blockers.
 ```
 
 The front matter must contain exactly `outcome: NAME`, with an unquoted declared
-outcome. The remaining Markdown is uninterpreted text. No SHA, acceptance,
-checks, or findings fields are required. An unchanged placeholder fails.
-Arbitrary report schemas and extra front-matter fields are not supported in
-this first implementation.
+outcome. Extra front-matter fields and unchanged placeholders fail validation.
+Use the remaining Markdown for findings, completed work, and blockers.
 
 Reports are durably recorded under a state lock. Identical repeat submissions
 return the original receipt; conflicting submissions fail. Old attempt tokens
@@ -189,7 +182,7 @@ OS security boundary.
 Submission does not cancel the worker or release slots. Routing happens only
 after successful worker termination and a valid report. The configured brief
 must tell workers to stop after submission. A failed run with a report still
-fails. No post-run Git validation is implicit.
+fails.
 
 ## Lifecycle and commands
 
@@ -289,14 +282,12 @@ A title is not required. Keep exactly four nonempty lines.
 ```
 
 The report command validates the current human stage's outcome, records the
-report, and routes the item atomically. No token or instructions file is needed
-from the person. It fails if the item is not waiting at a human stage. It does
-not launch a worker itself; an active runner, or the next `start`, dispatches
-the next stage. Each LLM execution, including a return from a human stage,
+report, and routes the item atomically. It requires the item to be waiting at a
+human stage. An active runner, or the next `start`, dispatches the next stage.
+Each LLM execution, including a return from a human stage,
 starts fresh and reads the issue/report history. Human reports are included in
-`issue show` just like worker reports. This command is not a duplicate-safe
-network API: repeating it after routing fails rather than targeting an old
-human attempt.
+`issue show` just like worker reports. Repeating the command after the item has
+left the human stage fails.
 
 An optional limit must include an explicit overflow destination:
 
@@ -310,8 +301,8 @@ retries. Failed attempts count. Human-stage entries count too. An interrupted
 launch recovered with the same attempt identifier does not count twice. Before
 execution four, the runner records an overflow transition and routes to the
 configured destination without launching a worker. The destination can be any
-stage, `hold`, or `done`. Missing `max` means unlimited executions; no hidden
-limit is applied. `max` without `overflow`, invalid limits/destinations, and
+stage, `hold`, or `done`. Missing `max` means unlimited executions.
+`max` without `overflow`, invalid limits/destinations, and
 cycles consisting entirely of overflow routes fail validation.
 
 Counts accumulate per item/stage until an explicit reset route is taken. String
@@ -450,19 +441,13 @@ or file preparation requires inspection and explicit retry; existing paths
 are not overwritten silently. Existing legacy delivery-queue state is rejected
 rather than reinterpreted. There is no automatic migration.
 
-## Boundaries and current limits
+## Worker permissions and testing
 
-Workers have the permissions of the user. Worktrees and prepared scripts are
-coordination tools, not a sandbox. Generated files can be edited by workers.
-The runner does not inspect commits to enforce their exclusion.
+Workers run with the user's permissions and can edit generated files. The
+starter's integration script checks for tracked `.agentctl-team` files before
+merging.
 
-This version has a local backlog, not an external tracker adapter. External
-tracker commands can be configured in scripts, but automatic external backlog
-intake is not implemented. There are no generic
-validation hooks, bounded queues, automatic cleanup,
-or automatic repair policies. They are not necessary for the toy pipeline.
-
-Test this application independently:
+Run the scheduler tests:
 
 ```sh
 python3 -m unittest discover -s tests -p test_team.py

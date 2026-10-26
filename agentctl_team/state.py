@@ -1,4 +1,4 @@
-"""One JSON queue, one lock, one append-only event log. No database."""
+"""Persist the queue in JSON with file locking and an append-only event log."""
 import contextlib
 import fcntl
 import hashlib

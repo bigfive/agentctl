@@ -37,11 +37,10 @@ retain their recorded targets; `--no-notifications` disables new messages, not
 previously queued deliveries. Do not redirect old alerts silently.
 
 Launch the runner as a detached process or through a service manager with logs
-retained. A long-lived foreground tool call is not reliable persistence. Keep
-the daemon's authentication environment explicit: a T3 shadow `CODEX_HOME`
-previously caused missing-credential failures. Do not copy credentials, silently
-switch providers, or restart a shared daemon. An isolated `AGENTCTL_HOME` can be
-used for an authorized experiment; use that same value for its worker backend.
+retained. A long-lived foreground tool call is not reliable persistence. Ensure
+the daemon's environment provides authentication for the configured harness.
+For isolated experiments, use the same `AGENTCTL_HOME` for the runner and its
+worker backend.
 
 **After confirming startup and completing available manager actions, end the turn
 when waiting for workers or the user.** Experimental Desktop steering can deliver
@@ -63,7 +62,7 @@ Stage `max` counts executions per item/stage since its last explicit reset;
 `{"to":"review","reset_count":true}` resets only this item's destination-stage
 count and preserves all history. Choose a configured reset-enabled human outcome
 when another attempt is appropriate, rather than changing shared policy for one
-item. `issue retry` does not reset counts. Manual stage moves are not implemented.
+item. `issue retry` preserves counts.
 
 Git ignore rules do not prevent force-added or already tracked runtime files.
 Keep the starter's integration check for tracked `.agentctl-team` files before

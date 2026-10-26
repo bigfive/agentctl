@@ -10,9 +10,8 @@ merge work already owned by the pipeline.
 
 Explain what is being delivered, what is queued, and what the pipeline will do
 automatically. State material limits or outstanding decisions. Use the requested
-model. Put task acceptance in issue bodies; stage prompts contain reusable role
-instructions. Do not convert a one-ticket delegation restriction into permanent
-shared stage policy.
+model. Put task requirements and item-specific constraints in issue bodies;
+stage prompts contain reusable role instructions.
 
 Concurrent manager implementation needs a separate branch/worktree too. Keep the
 integration checkout usable; do not leave your own uncommitted work blocking the
@@ -61,7 +60,6 @@ the user. Respect explicit pauses, cancellations, and scope changes.
 
 Inspect delivered artifacts and recorded checks against the request. Complete
 outstanding promised verification within scope, and report what actually ran.
-A pipeline `done` label is not proof of correct behavior; Node checks are not
-browser verification. Do not invent additional review gates or silently expand
-acceptance. Tell the user what was delivered, where to inspect it, verification,
-and any remaining limitations or decisions.
+Verify the requested behavior using the relevant checks and recorded evidence.
+Tell the user what was delivered, where to inspect it, what was verified, and
+any remaining limitations or decisions.
