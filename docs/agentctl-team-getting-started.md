@@ -1,29 +1,21 @@
-# Running a backlog with agentctl-team
+# Getting started with agentctl-team
 
-A coding task often takes several agent runs: implementation, review, fixes,
-and integration. With several tasks in progress, someone must track which run
-finished, pass its work to the next agent, limit concurrency, and handle blocked
-items.
+`agentctl-team` lets you define a pipeline across Codex, Claude Code, Cursor,
+and OpenCode, with a model and custom prompt for each stage. For example, Luna
+can implement a task in Codex and Sonnet can review it in Claude Code.
 
-`agentctl-team` manages those handoffs. You add tasks to a local backlog and
-configure stages with instructions and named outcomes. The runner starts each
-stage through agentctl, reads the worker's report, and routes the task to its
-next stage. Each task keeps its branch and worktree throughout, so a reviewer
-receives the implementation files and report history.
+Add tasks to the backlog. The runner launches a worker for each stage and uses
+its reported outcome to choose the next stage. You configure the routes: pass
+review, return for changes, or wait for a manager decision. Each task keeps its
+branch, worktree, and reports as it moves between harnesses.
 
-For example, three bug fixes can each follow this workflow:
+Pools limit concurrency, so several implementations can run together while
+integration happens one task at a time. Attempts and active jobs are recorded
+so the runner can continue after a restart.
 
-```text
-implement → review → integration → done
-               ↑          │
-               └──────────┘ changes requiring another review
-```
-
-An agent pool limits how many workers run together. An integration pool with one
-slot lets implementation and review proceed concurrently while merges happen
-one at a time. A human stage pauses an item for a manager to inspect a blocker
-and submit a decision. The runner records attempts, reports, and active jobs so
-it can continue after a restart.
+For a minimal two-stage JSON configuration with inline prompts and four-worker
+default concurrency, see
+[the minimal pipeline](../TEAM.md#minimal-pipeline).
 
 ## Try one task
 
@@ -81,5 +73,5 @@ to generate a coding workflow. Review its stage briefs, model, limits, and merge
 instructions, then add your tasks. Use `start --notify HARNESS:NATIVE-SESSION-ID`
 to send handoffs and runner alerts to your manager session.
 
-See [TEAM.md](TEAM.md) for configuration, reports, human stages, notification
+See [the configuration and command reference](agentctl-team-reference.md) for configuration, reports, human stages, notification
 setup, and recovery commands.

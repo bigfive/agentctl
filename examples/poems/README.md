@@ -1,7 +1,7 @@
 # Poem pipeline
 
 `create.py NEW_DIRECTORY` creates a disposable Git repository and a configurable
-write → review → integration pipeline. See [TEAM.md](../../TEAM.md) for commands.
+write → review → integration pipeline. See [the team reference](../../docs/agentctl-team-reference.md) for commands.
 
 Two items can run concurrently. Each retains one branch/worktree throughout.
 Writing and reviewing deliberately leave uncommitted files. The integration

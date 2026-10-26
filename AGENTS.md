@@ -2,7 +2,7 @@
 
 ## Required standards
 
-Read and follow [CODING_STANDARDS.md](CODING_STANDARDS.md) when writing or
+Read and follow [docs/coding-standards.md](docs/coding-standards.md) when writing or
 reviewing changes. Its documentation review requirements are approval criteria;
 request changes for violations before approving.
 

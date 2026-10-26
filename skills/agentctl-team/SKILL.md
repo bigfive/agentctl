@@ -10,6 +10,17 @@ chosen model and scope. Read [manager responsibilities](references/manager.md)
 when launching or handling notifications. Read [pipeline configuration](references/pipeline.md)
 when editing stages and [operations](references/operations.md) for session discovery or recovery.
 
+## Define a pipeline
+
+A minimal config needs only `stages`. Each LLM stage requires `worker` with an
+explicit harness/model, inline `prompt` (or a `files` directory), and `outcomes`.
+The config directory is the repository root by default. The first stage is the
+entry point; the checked-out branch is the base. Defaults use `agentctl` from
+`PATH`, four slots in the `default` pool, a 30-minute attempt timeout, and managed
+worktrees under the Git common directory. Stage pools default to `["default"]`.
+Override these fields when needed; invalid values fail rather than using defaults.
+See pipeline configuration for all fields and prepared-file behavior.
+
 ## Start
 
 ```sh
@@ -42,6 +53,10 @@ agentctl-team --config FILE status --summary
 agentctl-team --config FILE issue show ID
 agentctl-team --config FILE issue report ID --file REPORT.md
 ```
+
+The built-in `hold` route pauses an item as `held` and sends an alert
+when notifications are enabled. Resolve its blocker and use `issue retry ID`
+to rerun the same stage with its existing worktree and history.
 
 Inspect current state; alerts may be stale. Human stages require manager action,
 not necessarily a user decision. Resolve authorized actions, submit Markdown

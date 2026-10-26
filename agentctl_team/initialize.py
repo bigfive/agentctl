@@ -58,7 +58,7 @@ def initialize(config_path, repo, model):
                 'review': {'passed': 'integration', 'changes_made': 'review', 'blocked': 'human_review'},
                 'integration': {'complete': 'done', 'needs_review': 'review', 'blocked': 'human_integration'},
             }[name]
-            stages[name] = dict(type='llm', pools=['agents', 'integration'] if name == 'integration' else ['agents'],
+            stages[name] = dict(type='llm', pools=['default', 'integration'] if name == 'integration' else ['default'],
                                 timeout_seconds=1800, worker={'harness': 'codex', 'model': model,
                                 'options': {'reasoning_effort': 'low'}}, files=str(files.relative_to(config_path.parent)),
                                 outcomes=outcomes, on_error='human_' + name, max=4, overflow='human_' + name)
@@ -68,8 +68,7 @@ def initialize(config_path, repo, model):
                 'implement': {'to': 'work', 'reset_count': True},
                 'integrate': 'integration', 'cancel': 'done'}}
         config = dict(repo=str(repo), base_branch=branch, agentctl=binary,
-                      worktrees=str(Path.home() / '.agentctl-team/worktrees' / __import__('hashlib').sha256(str(repo).encode()).hexdigest()[:12]),
-                      poll_seconds=2, pools={'agents': 8, 'integration': 1}, entry='work', stages=stages,
+                      poll_seconds=2, pools={'default': 4, 'integration': 1}, entry='work', stages=stages,
                       human_wait_timeout_seconds=1800, watchdog={'interval_seconds': 5},
                       notification_templates={kind: str((notices / (kind + '.md')).relative_to(config_path.parent)) for kind in DEFAULTS},
                       launch_message='Read .agentctl-team/brief.md for your role. Run .agentctl-team/read-issue.sh for task context. Update .agentctl-team/report.md and run .agentctl-team/submit-report.sh when finished.')

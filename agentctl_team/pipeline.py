@@ -109,10 +109,34 @@ def config_load(path, notify=None):
     config = json.loads(path.read_text())
     if isinstance(config, dict) and 'notifications' in config:
         raise TeamError('notifications moved to start --notify HARNESS:NATIVE-SESSION-ID; remove notifications from config')
-    required = {'repo', 'base_branch', 'agentctl', 'worktrees', 'poll_seconds',
-                'pools', 'stages', 'entry', 'launch_message'}
-    if not isinstance(config, dict) or not required <= set(config) or set(config) - required - {'human_wait_timeout_seconds', 'notification_templates', 'watchdog'}:
-        raise TeamError('config requires exactly: ' + ', '.join(sorted(required)))
+    optional = {'repo', 'base_branch', 'agentctl', 'worktrees', 'poll_seconds',
+                'pools', 'entry', 'launch_message', 'human_wait_timeout_seconds',
+                'notification_templates', 'watchdog'}
+    if not isinstance(config, dict) or 'stages' not in config or set(config) - optional - {'stages'}:
+        raise TeamError('config requires stages and only documented optional fields')
+    if not isinstance(config['stages'], dict) or not config['stages']:
+        raise TeamError('stages must be a nonempty object')
+    config.setdefault('repo', str(path.parent))
+    config.setdefault('poll_seconds', 2)
+    config.setdefault('pools', {'default': 4})
+    config.setdefault('entry', next(iter(config['stages'])))
+    config.setdefault('launch_message', 'Read .agentctl-team/brief.md and follow its instructions.')
+    if 'agentctl' not in config:
+        binary = shutil.which('agentctl')
+        if binary is None:
+            raise TeamError('agentctl is unavailable on PATH')
+        config['agentctl'] = binary
+    if not isinstance(config['repo'], str) or not config['repo'].strip():
+        raise TeamError('repo must be a nonempty path')
+    config['repo'] = str((path.parent / Path(config['repo']).expanduser()).resolve())
+    if 'worktrees' not in config:
+        common = run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], config['repo']).strip()
+        config['worktrees'] = str(Path(common) / 'agentctl-team' / 'worktrees')
+    if 'base_branch' not in config:
+        branch = run(['git', 'branch', '--show-current'], config['repo']).strip()
+        if not branch:
+            raise TeamError('base_branch is required when the repository has a detached HEAD')
+        config['base_branch'] = branch
     # Optional timeout defaults to the agreed 30 minutes; null waits indefinitely.
     config.setdefault('human_wait_timeout_seconds', 1800)
     if config['human_wait_timeout_seconds'] is not None:
@@ -127,7 +151,7 @@ def config_load(path, notify=None):
         config.get('notification_templates', {}), path.parent, render)
     config['_path'] = str(path)
     for key in ('repo', 'worktrees', 'agentctl'):
-        if not isinstance(config[key], str) or not config[key]:
+        if not isinstance(config[key], str) or not config[key].strip():
             raise TeamError(key + ' must be a nonempty path')
         target = Path(config[key]).expanduser()
         config[key] = str((path.parent / target).resolve())
@@ -154,8 +178,8 @@ def config_load(path, notify=None):
         if kind not in ('llm', 'human'):
             raise TeamError('stage type must be llm or human: ' + name)
         fields = {'outcomes', 'type', 'max', 'overflow', 'on_error'}
-        required_stage = {'outcomes', 'type'} if kind == 'human' else {'pools', 'timeout_seconds', 'worker', 'files', 'outcomes'}
-        allowed = fields if kind == 'human' else fields | required_stage
+        required_stage = {'outcomes', 'type'} if kind == 'human' else {'worker', 'outcomes'}
+        allowed = fields if kind == 'human' else fields | required_stage | {'files', 'prompt', 'pools', 'timeout_seconds'}
         if not required_stage <= set(stage) or set(stage) - allowed:
             raise TeamError('invalid stage fields: ' + name)
         if 'on_error' in stage and (kind != 'llm' or stage['on_error'] not in {*stages, 'hold'}):
@@ -175,6 +199,8 @@ def config_load(path, notify=None):
                 raise TeamError('invalid outcome route in ' + name)
         if kind == 'human':
             continue
+        stage.setdefault('pools', ['default'])
+        stage.setdefault('timeout_seconds', 1800)
         positive(stage['timeout_seconds'], name + '.timeout_seconds')
         if (not isinstance(stage['pools'], list) or not stage['pools'] or
                 len(set(stage['pools'])) != len(stage['pools']) or
@@ -190,6 +216,13 @@ def config_load(path, notify=None):
                 raise TeamError('worker.options must be an object')
             run([config['agentctl'], 'validate-options', worker['harness'],
                  '--options-json', json.dumps(worker['options'])])
+        if ('files' in stage) == ('prompt' in stage):
+            raise TeamError('LLM stage requires exactly one of prompt or files: ' + name)
+        if 'prompt' in stage:
+            if not isinstance(stage['prompt'], str) or not stage['prompt'].strip():
+                raise TeamError('prompt must be nonempty: ' + name)
+            render(stage['prompt'], {key: 'validation' for key in VARIABLES})
+            continue
         if not isinstance(stage['files'], str) or not stage['files']:
             raise TeamError('files must name a directory')
         directory = (path.parent / stage['files']).resolve(strict=True)
@@ -212,7 +245,7 @@ def config_load(path, notify=None):
     if notify is not None:
         notification_config({'target': notify})
         config['notifications'] = {'target': notify}
-    if config['entry'] not in stages:
+    if not isinstance(config['entry'], str) or config['entry'] not in stages:
         raise TeamError('entry must name a stage')
     if not isinstance(config['launch_message'], str) or not config['launch_message'].strip():
         raise TeamError('launch_message must be nonempty')
@@ -395,15 +428,23 @@ class Pipeline:
         values = dict(item_id=item['id'], title=item['title'], stage=item['stage'],
                       attempt=token, worktree=item['worktree'], branch=item['branch'],
                       team_command=command, config_path=shlex.quote(self.config['_path']))
-        for source in Path(stage['files']).rglob('*'):
-            relative = source.relative_to(stage['files'])
-            target = archive / 'files' / relative
-            if source.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
+        if 'prompt' in stage:
+            from .inline import stage_files
+            for name, (text, mode) in stage_files(stage).items():
+                target = archive / 'files' / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(render(source.read_text(), values))
-                target.chmod(source.stat().st_mode & 0o777)
+                target.write_text(render(text, values))
+                target.chmod(mode)
+        else:
+            for source in Path(stage['files']).rglob('*'):
+                relative = source.relative_to(stage['files'])
+                target = archive / 'files' / relative
+                if source.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(render(source.read_text(), values))
+                    target.chmod(source.stat().st_mode & 0o777)
         prompt = render(self.config['launch_message'], values)
         attempt = dict(id=token, stage=item['stage'], definition=json.loads(json.dumps(stage)),
                        prompt=prompt, archive=str(archive), job=None,

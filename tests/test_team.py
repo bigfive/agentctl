@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from agentctl_team.pipeline import Pipeline, config_load
@@ -78,6 +79,120 @@ class PipelineTest(unittest.TestCase):
                 job['status'] = status
         self.fake.write_text(json.dumps(state))
         return receipt
+
+    def test_minimal_config_limits_concurrency_and_times_out_stalled_attempts(self):
+        self.config = self.repo / 'pipeline.json'
+        self.definition = {'stages': {'work': {
+            'worker': {'harness': 'codex', 'model': None},
+            'prompt': 'Implement the task.', 'outcomes': {'ready': 'done'}}}}
+        self.write_config()
+        binaries = self.root / 'bin'
+        binaries.mkdir()
+        (binaries / 'agentctl').symlink_to(FAKE)
+        with patch.dict(os.environ, {'PATH': str(binaries) + os.pathsep + os.environ['PATH']}):
+            config = self.load_config()
+        self.p = Pipeline(config)
+        self.p.validate_start()
+        for n in range(5):
+            self.p.add('task' + str(n), 'Task', 'Body')
+        self.p.tick()
+        self.assertEqual(4, len(self.jobs()))
+        self.assertEqual('queued', self.p.show('task4')['state'])
+        first = self.p.show('task0')
+        common = Path(self.git('rev-parse', '--path-format=absolute', '--git-common-dir'))
+        self.assertTrue(Path(first['worktree']).is_relative_to(common))
+        with self.p.store.transaction() as state:
+            state['tasks']['task0']['attempt']['started'] = time.time() - 1801
+        self.p.tick()
+        self.assertEqual('cancelling', self.p.show('task0')['state'])
+        self.p.tick()
+        self.assertEqual('error', self.p.show('task0')['state'])
+        self.assertEqual('running', self.p.show('task4')['state'])
+
+    def test_default_base_branch_requires_attached_head_and_path_requires_binary(self):
+        self.definition.pop('base_branch')
+        self.git('checkout', '--detach')
+        self.write_config()
+        with self.assertRaises(TeamError):
+            self.load_config()
+        self.definition['base_branch'] = 'main'
+        self.write_config()
+        self.load_config()
+        self.definition.pop('agentctl')
+        self.write_config()
+        with patch('agentctl_team.pipeline.shutil.which', return_value=None):
+            with self.assertRaises(TeamError):
+                self.load_config()
+
+    def test_invalid_optional_values_are_not_replaced_by_defaults(self):
+        original = json.loads(json.dumps(self.definition))
+        for field, value in (('repo', ''), ('base_branch', ''), ('agentctl', ''),
+                             ('worktrees', ''), ('poll_seconds', None), ('poll_seconds', 0),
+                             ('pools', {}), ('entry', ''), ('launch_message', ' ')):
+            with self.subTest(field=field, value=value):
+                self.definition = json.loads(json.dumps(original))
+                self.definition[field] = value
+                self.write_config()
+                with self.assertRaises(TeamError):
+                    self.load_config()
+        for field, value in (('pools', []), ('pools', ['unknown']), ('timeout_seconds', None),
+                             ('timeout_seconds', 0), ('timeout_seconds', '1800')):
+            with self.subTest(field=field, value=value):
+                self.definition = json.loads(json.dumps(original))
+                self.definition['stages']['write'][field] = value
+                self.write_config()
+                with self.assertRaises(TeamError):
+                    self.load_config()
+
+    def test_inline_stages_handoff_across_harnesses_using_generated_report_tools(self):
+        for name, stage in self.definition['stages'].items():
+            stage.pop('files')
+            stage['prompt'] = 'Handle {{ item_id }} at {{ stage }}.'
+        self.definition['stages']['review']['worker'] = {'harness': 'claude', 'model': 'sonnet'}
+        self.write_config()
+        self.p = Pipeline(self.load_config())
+        self.p.add('one', 'One', 'Implement a change')
+        self.p.tick()
+        worktree = Path(self.p.show('one')['worktree'])
+        (worktree / 'change.txt').write_text('work for review')
+        for outcome in ('ready', 'passed', 'complete'):
+            item = self.p.show('one')
+            read = subprocess.run(['.agentctl-team/read-issue.sh'], cwd=worktree,
+                                  capture_output=True, text=True, check=True)
+            self.assertEqual('Implement a change', json.loads(read.stdout)['body'])
+            report = worktree / '.agentctl-team/report.md'
+            report.write_text('---\noutcome: ' + outcome + '\n---\n\nVerified work\n')
+            subprocess.run(['.agentctl-team/submit-report.sh'], cwd=worktree,
+                           capture_output=True, text=True, check=True)
+            state = json.loads(self.fake.read_text())
+            next(job for job in state['jobs'] if job['job'] == item['attempt']['job'])['status'] = 'succeeded'
+            self.fake.write_text(json.dumps(state))
+            self.p = Pipeline(self.load_config())
+            self.p.tick()
+        self.assertEqual('done', self.p.show('one')['state'])
+        self.assertEqual(['codex', 'claude', 'codex'], [job['harness'] for job in self.jobs()])
+        self.assertEqual('work for review', (worktree / 'change.txt').read_text())
+
+    def test_inline_prompt_configuration_rejects_invalid_or_ambiguous_input(self):
+        stage = self.definition['stages']['write']
+        original = dict(stage)
+        for prompt in (None, '', '  ', 42, '{{ unknown }}', '{{ broken'):
+            with self.subTest(prompt=prompt):
+                stage.clear()
+                stage.update(original)
+                stage.pop('files')
+                stage['prompt'] = prompt
+                self.write_config()
+                with self.assertRaises(TeamError):
+                    self.load_config()
+        for fields in ({}, {'files': original['files'], 'prompt': 'Implement'}):
+            stage.clear()
+            stage.update(original)
+            stage.pop('files')
+            stage.update(fields)
+            self.write_config()
+            with self.assertRaises(TeamError):
+                self.load_config()
 
     def test_same_worktree_uncommitted_changes_and_no_implicit_merge(self):
         self.p.add('one', 'Poem', 'Write a poem')
@@ -163,7 +278,7 @@ class PipelineTest(unittest.TestCase):
         with self.assertRaises(TeamError):
             self.p.human_report('one', report)
 
-    def test_invalid_report_and_timeout_hold_without_advancing(self):
+    def test_invalid_report_and_timeout_stop_without_advancing(self):
         self.p.add('one', 'One', 'Body')
         self.p.tick()
         item = self.p.show('one')

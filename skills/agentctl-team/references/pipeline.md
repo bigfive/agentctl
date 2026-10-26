@@ -18,7 +18,7 @@ agentctl-team --config /path/to/pipeline.json start --notify codex:NATIVE-SESSIO
 The config parent directory must exist. `init` creates the config and a sibling
 `pipeline-stages/` directory, refusing to overwrite either. `--repo` defaults to the current directory;
 `--model` defaults to `gpt-6-luna`. The checked-out branch becomes the explicit
-base branch. Review generated prompts before starting: the starter uses eight
+base branch. Review generated prompts before starting: the starter uses four
 shared slots, serial integration, low reasoning effort, 30-minute attempt/human
 wait timeouts, and four executions per stage before human overflow. Starter human retry routes explicitly reset the destination-stage count for
 that item, preserving history.
@@ -48,12 +48,34 @@ completion for inspection; cleanup is manual.
 
 ## Definition
 
-All top-level fields below are required. Notification destinations are supplied with `start --notify`, not stored in
-the workflow config. `start` requires either `--notify` or an explicit `--no-notifications`. Stage `type` is optional and defaults to `llm` for
-compatibility with existing configurations; `human` must be explicit. Paths are relative to the config file
-unless absolute. `model: null` explicitly selects the harness's default model.
-Timeouts and polling intervals are finite positive seconds. Pool capacities are
-positive integers.
+Only `stages` is required at the top level. Each LLM stage requires `worker`
+(with explicit `harness` and `model`), `outcomes`, and exactly one of `prompt`
+or `files`. Stage `type` defaults to `llm`; set `type: human` for a human stage.
+
+| Optional field | Default when absent |
+|---|---|
+| `repo` | Directory containing the config; must be a Git repository root |
+| `base_branch` | Checked-out branch; detached HEAD requires an explicit branch |
+| `agentctl` | Executable resolved from `PATH` |
+| `worktrees` | `<git-common-dir>/agentctl-team/worktrees` |
+| `poll_seconds` | `2` seconds |
+| `pools` | `{"default": 4}` |
+| Stage `pools` | `["default"]` for LLM stages |
+| Stage `timeout_seconds` | `1800` seconds (30 minutes) per attempt |
+| `entry` | First stage in JSON order |
+| `launch_message` | `Read .agentctl-team/brief.md and follow its instructions.` |
+
+Defaults apply only to absent fields. Empty, malformed, or unsupported values
+fail validation. Custom pool definitions replace the default pool mapping;
+stages must reference pools present in that mapping.
+
+Notification destinations are supplied on each `start` with `--notify` or
+`--no-notifications`. Paths are relative to the config file unless absolute.
+`model: null` selects the harness's configured default model. Timeouts and
+polling intervals are finite positive seconds; pool capacities are positive
+integers.
+
+This example overrides the defaults to serialize integration:
 
 ```json
 {
@@ -64,17 +86,17 @@ positive integers.
   "poll_seconds": 1,
   "entry": "write",
   "launch_message": "Read .agentctl-team/brief.md and follow its instructions.",
-  "pools": {"agents": 8, "integration": 1},
+  "pools": {"default": 4, "integration": 1},
   "stages": {
     "write": {
-      "pools": ["agents"],
+      "pools": ["default"],
       "timeout_seconds": 1800,
       "worker": {"harness": "codex", "model": null},
       "files": "stages/write",
       "outcomes": {"ready": "integration", "blocked": "hold"}
     },
     "integration": {
-      "pools": ["agents", "integration"],
+      "pools": ["default", "integration"],
       "timeout_seconds": 1800,
       "worker": {"harness": "codex", "model": null},
       "files": "stages/integration",
@@ -121,6 +143,23 @@ The recorded attempt contains the options used. Every LLM execution starts a
 new session.
 
 ## Prepared files and prompts
+
+Each LLM stage requires exactly one of `prompt` or `files`.
+
+Use `prompt` for inline instructions, for example:
+
+```json
+"prompt": "Implement the task and run relevant checks. Report ready or blocked."
+```
+
+Inline prompts must be nonempty strings and support the template variables below.
+The runner prepares a brief, report template, and executable task-reading and
+report-submission scripts. The brief includes the stage's allowed outcomes and
+instructions to submit the report and exit. The default `launch_message`
+directs workers to read this brief.
+
+Use `files` to supply your own brief and scripts:
+
 
 Each stage directory must contain UTF-8 `brief.md`, `report.md`, executable
 `read-issue.sh`, and executable `submit-report.sh`. Additional files and nested
@@ -220,7 +259,8 @@ held, or in error; the
 runner does not retroactively apply them to active or completed work. Title,
 body, and priority edits are live. At least one edit field is required.
 
-Routing to `hold` retains the stage and worktree without dispatching anything.
+Routing to `hold` sets the task state to `held`, retains its stage and
+worktree, and notifies the manager when notifications are enabled.
 Use an explicit human stage for discussion and resolution. `issue retry` can
 rerun held or failed LLM work after the cause is resolved; it always starts a
 new session and preserves the branch and worktree. Human stages cannot be
@@ -228,8 +268,8 @@ retried this way: submit a human report instead. The old `issue resume` and
 answer-file mechanism have been removed. Existing pending legacy continuations
 are rejected explicitly, not silently reinterpreted.
 
-Operational errors (missing report, failed worker, malformed preparation) hold
-as `error`, separately from a worker's declared `hold` outcome. No automatic
+Operational errors (missing report, failed worker, malformed preparation) remain
+as `error`, separately from routing to `hold`. No automatic
 retry or substituted outcome is used. A timeout cancels the worker and waits
 for its terminal status before releasing capacity and marking the item as an
 error. Status failures stop the scheduler with a visible error while retaining
@@ -369,7 +409,7 @@ A successful `agentctl notify` confirms transport acceptance, not a human read. 
 
 Every runner invocation records its start and stop under `runs` in the state
 file. With notifications enabled it attempts a separate runner-stopped message
-before exiting, including backlog completion, waiting for human/held work,
+before exiting, including backlog completion, waiting for human or held work,
 requested stop, completed drain/cancellation, diagnostic `--once` exit,
 SIGINT/SIGTERM, and handled runtime or startup-validation errors. The message
 identifies any workers still running and tells the manager to restart the
