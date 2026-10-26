@@ -71,6 +71,18 @@ def main():
                          option('--request-id'), parent)
         save(state)
         emit(job)
+    elif command == 'interrupt':
+        previous = next(job for job in state['jobs'] if job['job'] == ARGS[1])
+        existing = next((job for job in state['jobs'] if job['request_id'] == option('--request-id')), None)
+        if existing:
+            emit(existing)
+            return
+        if previous['status'] != 'running':
+            sys.exit(1)
+        previous['status'] = 'cancelled'
+        job = job_record(state, previous['harness'], ARGS[2], previous['cwd'], option('--request-id'), previous['job'])
+        save(state)
+        emit(job)
     elif command == 'status':
         job = next((j for j in state['jobs'] if j['job'] == ARGS[1]), None)
         if job is None:

@@ -44,9 +44,11 @@ def parser():
     add.add_argument('--dep', action='append', default=[], help='optional; no dependencies if absent')
     listing = issue.add_parser('list')
     listing.add_argument('--json', action='store_true', help='full item records as JSON')
-    for action in ('show', 'edit', 'retry', 'report'):
+    for action in ('show', 'edit', 'retry', 'report', 'interrupt'):
         sub = issue.add_parser(action)
         sub.add_argument('id')
+        if action == 'interrupt':
+            sub.add_argument('correction')
         if action == 'edit':
             sub.add_argument('--body-file')
             sub.add_argument('--title')
@@ -119,10 +121,13 @@ def schedule(pipeline, once=False, daemon=False):
                 control = state['control']['stop']
                 if control == 'cancel':
                     for item in pipeline.active(state):
-                        if item['attempt']['job']:
-                            pipeline.agent.cancel(item['attempt']['job'])
-                            with pipeline.store.transaction() as current:
-                                current['tasks'][item['id']].update(state='cancelling', error='cancelled by operator')
+                        with pipeline.store.transaction() as current:
+                            active = current['tasks'][item['id']]
+                            if active['state'] == 'interrupting':
+                                raise TeamError('resolve the pending interruption before cancelling active work')
+                            if active['state'] in ('running', 'cancelling', 'launching') and active['attempt']['job']:
+                                pipeline.agent.cancel(active['attempt']['job'])
+                                active.update(state='cancelling', error='cancelled by operator')
                 if once:
                     reason = 'once'
                     break
@@ -219,6 +224,8 @@ def main(argv=None):
                     body=Path(args.body_file).read_text() if args.body_file is not None else None,
                     title=args.title, priority=args.priority,
                     deps=[] if args.clear_deps else args.dep)
+            elif args.action == 'interrupt':
+                result = pipeline.interrupt(args.id, args.correction)
             elif args.action == 'retry':
                 pipeline.retry(args.id)
             elif args.action == 'report':

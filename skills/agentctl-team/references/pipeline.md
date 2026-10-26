@@ -139,8 +139,8 @@ options explicitly. Options are passed through agentctl's public
 command. An old agentctl executable or daemon fails visibly rather than ignoring
 requested options. Restart an older daemon separately before requesting them.
 
-The recorded attempt contains the options used. Every LLM execution starts a
-new session.
+The recorded attempt contains the options used. Each stage execution starts a new session. An interruption resumes that
+execution’s session with a correction.
 
 ## Prepared files and prompts
 
@@ -283,6 +283,27 @@ restart. `--drain` observes existing runs without launching new ones.
 `--cancel-active` cancels runs and observes their termination. SIGINT/SIGTERM
 exit without killing workers. A subsequent `start` clears the stop request.
 A paused runner remains paused until `resume`.
+
+## Correct a running worker
+
+```sh
+agentctl-team --config FILE issue interrupt ID "Use the existing parser instead."
+```
+
+The command stops the current job, waits for confirmed termination, and resumes
+its native session with the correction. The item keeps its stage, attempt,
+worktree, and capacity allocation. Its replacement job becomes the active job.
+The previous job and any submitted report are recorded under the attempt's
+`interruptions`; the replacement must submit a new report. Its timeout starts
+when the replacement is launched.
+
+If the response is lost, the item remains `interrupting`. Inspect `status
+--summary` and repeat the same command and correction to reconcile its recorded
+request. A different correction is rejected until that interruption is resolved.
+Use the team command for pipeline workers so the scheduler tracks the replacement.
+Restart an older runner and agentctl daemon to load interrupt support.
+OpenCode server turns currently reject interruption before stopping the CLI,
+because stopping that client does not confirm the server turn has stopped.
 
 ## Human stages and execution limits
 

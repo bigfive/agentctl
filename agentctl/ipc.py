@@ -115,6 +115,9 @@ def dispatch(daemon, request):
                 session_id=native, request_id=request.get("request_id"),
                 options=request["options"] if "options" in request else record.get("options"))
             return {"ok": True, "data": child}
+        if op == "interrupt":
+            return {"ok": True, "data": daemon.interrupt_job(
+                request["job"], request["prompt"], request.get("request_id"))}
         if op == "notify":
             delivery = daemon.deliver_session(request["target"], request["message"],
                                                request.get("request_id"))

@@ -54,5 +54,8 @@ class Agentctl:
     def cancel(self, job):
         return self.call('cancel', job)
 
+    def interrupt(self, job, prompt, request_id):
+        return self.call('interrupt', job, prompt, '--request-id', request_id)
+
     def notify(self, target, message, identifier):
         return self.call('notify', target, '--message', message, '--id', identifier)

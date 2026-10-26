@@ -119,6 +119,13 @@ def _build_parser():
     followup.add_argument("--json", action="store_true")
     followup.set_defaults(handler=cmd_followup)
 
+    interrupt = sub.add_parser('interrupt', help='stop a running worker and resume its session with a correction')
+    interrupt.add_argument('job')
+    interrupt.add_argument('prompt')
+    interrupt.add_argument('--request-id')
+    interrupt.add_argument('--json', action='store_true')
+    interrupt.set_defaults(handler=cmd_interrupt)
+
     send = sub.add_parser("notify", help="send a message to an existing native session")
     send.add_argument("target", metavar="HARNESS:SESSION-ID")
     message = send.add_mutually_exclusive_group(required=True)
@@ -318,6 +325,14 @@ def cmd_followup(args):
         print(json.dumps(child, indent=2, sort_keys=True))
     else:
         print(child["job"])
+    return ExitCode.OK
+
+
+def cmd_interrupt(args):
+    record = ipc.call('interrupt', job=args.job, prompt=args.prompt, request_id=args.request_id)
+    if record['status'] in (store.FAILED, store.CANCELLED):
+        raise UsageError('replacement worker failed: ' + str(record.get('error')))
+    print(json.dumps(record, indent=2, sort_keys=True) if args.json else record['job'])
     return ExitCode.OK
 
 

@@ -34,7 +34,7 @@ def summary(pipeline):
     lines += ['Items: ' + (', '.join(str(n) + ' ' + k for k, n in sorted(counts.items())) or 'none'),
               'Stages (unfinished): ' + (', '.join(k + '=' + str(n) for k, n in sorted(stages.items())) or 'none'),
               '', 'Manager actions:']
-    attention = [item for item in tasks if item['state'] in ('waiting-human', 'error', 'held') or item.get('observation_error')]
+    attention = [item for item in tasks if item['state'] in ('waiting-human', 'error', 'held', 'interrupting') or item.get('observation_error')]
     for item in attention:
         attempts = item['history'] + ([item['attempt']] if item['attempt'] else [])
         evidence = [(attempt['report']['at'], re.split(r'---\r?\n', attempt['report']['text'], maxsplit=2)[2].strip())
@@ -44,6 +44,9 @@ def summary(pipeline):
                      if transition['kind'] == 'overflow']
         latest_evidence = max(evidence, key=lambda entry: entry[0])[1] if evidence else 'Read issue history and transitions.'
         detail = item.get('observation_error') or item.get('error') or latest_evidence
+        if item['state'] == 'interrupting':
+            pending = item['attempt']['interrupt_pending']
+            detail = 'Interruption pending: ' + pending['correction'] + '. Repeat issue interrupt with this correction to reconcile. ' + pending.get('error', '')
         lines += [item['id'] + ' [' + item['stage'] + ', ' + item['state'] + '] ' + item['title'],
                   '  ' + ' '.join(detail.split())[:700]]
     if not attention:

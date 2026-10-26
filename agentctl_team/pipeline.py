@@ -352,6 +352,51 @@ class Pipeline:
                 raise TeamError('only held or failed executions can be retried; human stages require issue report')
             item.update(state='queued', error=None)
 
+    def interrupt(self, item_id, correction):
+        if not isinstance(correction, str) or not correction.strip():
+            raise TeamError('correction must be nonempty')
+        with self.store.transaction() as state:
+            item = self.store.task(state, item_id)
+            if item['state'] not in ('running', 'interrupting'):
+                raise TeamError('interrupt requires a running item')
+            attempt = item['attempt']
+            if item['state'] == 'interrupting':
+                pending = attempt['interrupt_pending']
+                if pending['correction'] != correction:
+                    raise TeamError('an interruption is unresolved; repeat its original correction to reconcile it')
+            else:
+                pending = dict(job=attempt['job'], correction=correction,
+                               request_id='interrupt:' + uuid.uuid4().hex, at=time.time())
+                attempt['interrupt_pending'] = pending
+                item['state'] = 'interrupting'
+        # Keep capacity reserved while the daemon stops and replaces the worker.
+        # Repeating this request reconciles a lost response using its stable ID.
+        try:
+            with self.store.transaction() as state:
+                item = self.store.task(state, item_id)
+                attempt = item['attempt']
+                if item['state'] != 'interrupting' or attempt.get('interrupt_pending') != pending:
+                    raise TeamError('interruption ownership changed; inspect the item')
+                result = self.agent.interrupt(pending['job'], correction, pending['request_id'])
+                if (not isinstance(result, dict) or not result.get('job') or
+                        result.get('followup_of') != pending['job'] or
+                        result.get('status') not in ('running', 'pending', 'succeeded')):
+                    raise TeamError('interrupt did not confirm a replacement worker')
+                pending['report'] = attempt['report']
+                pending['replacement_job'] = result['job']
+                attempt.setdefault('interruptions', []).append(pending)
+                attempt.pop('interrupt_pending')
+                attempt.update(job=result['job'], report=None, started=time.time())
+                item.update(state='running', error=None)
+        except Exception as exc:
+            with self.store.transaction() as state:
+                attempt = self.store.task(state, item_id)['attempt']
+                if 'interrupt_pending' in attempt:
+                    attempt['interrupt_pending']['error'] = str(exc)
+            raise
+        self.store.event('interrupted', item=item_id, job=pending['job'], replacement=result['job'])
+        return self.show(item_id)
+
     @staticmethod
     def read_report(path):
         text = Path(path).read_text()
@@ -761,20 +806,21 @@ class Pipeline:
         self.store.event('error', item=item_id, error=message)
 
     def observe(self, item):
-        attempt = item['attempt']
-        record = self.agent.status(attempt['job'])
-        status = record['status']
-        if status not in TERMINAL | {'pending', 'running'}:
-            raise TeamError('unsupported worker status: ' + str(status))
-        if status not in TERMINAL:
-            if time.time() - attempt['started'] > attempt['definition']['timeout_seconds']:
-                self.agent.cancel(attempt['job'])
-                with self.store.transaction() as state:
-                    self.store.task(state, item['id']).update(state='cancelling', error='attempt timed out')
-            return
         with self.store.transaction() as state:
             current = self.store.task(state, item['id'])
+            if (current['state'] not in ('running', 'cancelling') or
+                    current['attempt']['job'] != item['attempt']['job']):
+                return
             attempt = current['attempt']
+            record = self.agent.status(attempt['job'])
+            status = record['status']
+            if status not in TERMINAL | {'pending', 'running'}:
+                raise TeamError('unsupported worker status: ' + str(status))
+            if status not in TERMINAL:
+                if time.time() - attempt['started'] > attempt['definition']['timeout_seconds']:
+                    self.agent.cancel(attempt['job'])
+                    current.update(state='cancelling', error='attempt timed out')
+                return
             report = attempt['report']
             if current['state'] == 'cancelling' or status != 'succeeded' or not report:
                 message = 'worker ' + status + (' without a report' if not report else '')
@@ -790,7 +836,7 @@ class Pipeline:
 
     def active(self, state):
         return [item for item in state['tasks'].values()
-                if item['state'] in ('preparing', 'launching', 'running', 'cancelling')]
+                if item['state'] in ('preparing', 'launching', 'running', 'cancelling', 'interrupting')]
 
     def tick(self):
         for item in list(self.store.load()['tasks'].values()):

@@ -32,7 +32,8 @@ agentctl-team --config FILE start --notify codex:VERIFIED_NATIVE_SESSION_ID
 
 Review generated prompts, model, base branch, and integration policy. Put task
 scope in issue bodies; shared stage prompts apply to every item. Each item
-keeps one branch/worktree; every LLM execution is fresh. Keep concurrent manager
+keeps one branch/worktree; stages start fresh sessions and interrupts resume the
+current session. Keep concurrent manager
 changes out of the integration checkout.
 
 For Codex, inspect `CODEX_THREAD_ID` and verify it belongs to this conversation.
@@ -45,6 +46,14 @@ Launch detached with retained logs. Confirm startup and complete available
 manager actions, then end your turn when waiting for workers or a necessary
 user decision. Steering can arrive mid-turn; queued delivery needs a settled
 turn. Do not poll to keep a turn open. Launching does not complete the request.
+
+## Correct a running worker
+
+Use `agentctl-team --config FILE issue interrupt ID "correction"` to stop and
+resume the item's current worker in the same session. This preserves work and
+tracks the replacement job. Use this command for team workers so scheduler
+ownership stays correct. If the item remains `interrupting`, inspect summary
+and repeat the same correction to reconcile its durable request.
 
 ## Respond
 

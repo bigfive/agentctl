@@ -247,3 +247,14 @@ recipient conversation before taking any manual recovery action.
 identical completed request returns the existing job. A launch interrupted in
 the gap after recording intent fails as ambiguous rather than launching the
 same task a second time.
+
+### Correct a running worker
+
+`agentctl interrupt JOB_ID "correction"` stops a tracked worker, confirms its
+termination, and resumes its native session with the correction. It returns a
+replacement job handle inheriting the model, options, and working directory.
+Use `--request-id ID` for recoverable retries. Track the returned job for further
+completion; existing waits stay on the cancelled job. For pipeline workers use
+`agentctl-team --config FILE issue interrupt ID "correction"` instead.
+Session-delivery records are rejected. OpenCode server turns are unsupported
+until server-side termination can be confirmed.

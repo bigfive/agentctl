@@ -65,6 +65,12 @@ agentctl-team --config pipeline.json issue add --id fix --title 'Fix the bug' --
 agentctl-team --config pipeline.json start --notify codex:NATIVE-SESSION-ID
 ```
 
+Correct a running task with:
+
+```sh
+agentctl-team --config pipeline.json issue interrupt fix "Use the existing parser instead."
+```
+
 Use model IDs supported by your harness installations. See the
 [reference](docs/agentctl-team-reference.md) for stage files, pools, notifications,
 and recovery, or [the walkthrough](docs/agentctl-team-getting-started.md).

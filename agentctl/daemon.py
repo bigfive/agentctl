@@ -116,6 +116,60 @@ class Daemon(object):
         with self.operation_lock:
             return self._operation(request_id, {"session": target, "prompt": prompt}, deliver)
 
+    def interrupt_job(self, job_id, prompt, request_id=None):
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise UsageError('correction must not be empty')
+        original = store.read(job_id)
+        if original.get('kind') == 'session_delivery' or not original.get('command'):
+            raise UsageError('interrupt requires an agentctl worker job')
+        if original['harness'] == 'opencode':
+            from .errors import UnsupportedOperationError
+            raise UnsupportedOperationError('interrupt cannot confirm termination of an OpenCode server turn')
+        native = original.get('native_session_id')
+        if not native:
+            raise UsageError('worker has not reported a native session id yet; try again once it has')
+        adapter = children.get(original['harness'])
+        adapter.followup_command(native, original['cwd'], original.get('model'),
+                                 store.result_path(job_id))
+        payload = dict(interrupt_of=job_id, harness=original['harness'], prompt=prompt)
+        def replace():
+            current = store.read(job_id)
+            if store.is_terminal(current):
+                raise UsageError('interrupt requires a running worker; use followup for a finished job')
+            self.cancel_job(job_id)
+            deadline = time.monotonic() + 15
+            while not store.is_terminal(store.read(job_id)):
+                if time.monotonic() >= deadline:
+                    raise UsageError('worker termination was not confirmed; replacement was not launched')
+                time.sleep(.05)
+            pid = current.get('pid')
+            if pid and _pid_alive(pid):
+                raise UsageError('worker process is still alive; replacement was not launched')
+            if pid:
+                try:
+                    os.killpg(pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    os.killpg(pid, signal.SIGKILL)
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            os.killpg(pid, 0)
+                        except ProcessLookupError:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise UsageError('worker process group has not exited; replacement was not launched')
+                        time.sleep(.05)
+            child = self._start_job(original['harness'], prompt, original['cwd'],
+                                    original.get('model'), followup_of=job_id,
+                                    session_id=native, options=original.get('options'))
+            store.update(child['job'], interrupted_job=job_id)
+            store.update(job_id, replacement_job=child['job'])
+            return store.read(child['job'])
+        with self.operation_lock:
+            return self._operation(request_id, payload, replace)
+
     def _start_job(self, harness, prompt, cwd, model=None, followup_of=None,
                    session_id=None, options=None):
         """Create, launch, and begin watching one child run."""

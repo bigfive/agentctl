@@ -9,6 +9,7 @@ agentctl wait <job>... [--rewake] [--timeout SECONDS] [--json]
 agentctl status <job>
 agentctl read <job> [--stream | --stderr]
 agentctl followup <job> <prompt> [--request-id ID]
+agentctl interrupt <job> <correction> [--request-id ID] [--json]
 agentctl cancel <job>
 agentctl list
 agentctl daemon status|start|stop|run
@@ -37,6 +38,25 @@ UTF-8 text; `--message` handles short messages.
 
 Three identifiers exist and are never interchangeable: the agentctl job handle
 (`job_...`), the wait handle (`wait_...`), and the harness's own session id.
+
+## Correct a running worker
+
+```sh
+agentctl interrupt JOB_ID "Use the existing parser instead."
+```
+
+Stops a worker launched by agentctl, confirms termination, then resumes its
+native session with the correction. Prints the replacement job handle. The
+replacement inherits the working directory, model, and worker options, and
+records `followup_of` pointing to the interrupted job. The original job records
+`replacement_job`. Existing waits on the original job receive its cancellation;
+register a wait on the replacement to track its completion.
+
+Use `--request-id ID` to recover the same replacement after losing a response;
+reuse the same correction and job ID. Session-delivery records created by
+`notify` are rejected. A native session ID must be available before interruption.
+OpenCode server turns are unsupported because stopping the CLI does not confirm
+that the server turn has stopped. Restart an older daemon to load this command.
 
 ## Optional OpenCode tool
 

@@ -29,6 +29,9 @@ agentctl asyncwait "$job" --notify codex:<your-thread-id>
 Children run with approvals disabled and can execute commands in the working
 directory you provide. Use `--cwd /path/to/project` to select it.
 
+Correct a running worker with `agentctl interrupt JOB_ID "correction"`. It stops
+the job and resumes the same session with your correction, returning a new job ID.
+
 ## Run a team workflow
 
 `agentctl-team` runs custom pipelines across harnesses and models: for example,

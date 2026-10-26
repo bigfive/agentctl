@@ -80,6 +80,53 @@ class PipelineTest(unittest.TestCase):
         self.fake.write_text(json.dumps(state))
         return receipt
 
+    def test_interrupt_preserves_attempt_work_and_tracks_corrected_worker(self):
+        self.p.add('one', 'Task', 'Body')
+        self.p.tick()
+        before = self.p.show('one')
+        artifact = Path(before['worktree']) / 'work.txt'
+        artifact.write_text('unfinished work')
+        self.finish('one', 'ready', status='running')
+        result = subprocess.run([str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
+                                 'issue', 'interrupt', 'one', 'Use existing parser'],
+                                capture_output=True, text=True, check=True)
+        corrected = json.loads(result.stdout)
+        self.assertEqual(before['attempt']['id'], corrected['attempt']['id'])
+        self.assertNotEqual(before['attempt']['job'], corrected['attempt']['job'])
+        self.assertEqual('cancelled', self.jobs()[0]['status'])
+        self.assertEqual(before['attempt']['job'], self.jobs()[1]['followup_of'])
+        self.assertEqual('Use existing parser', self.jobs()[1]['prompt'])
+        self.assertEqual('unfinished work', artifact.read_text())
+        self.assertIsNone(corrected['attempt']['report'])
+        self.assertEqual('ready', corrected['attempt']['interruptions'][0]['report']['outcome'])
+        # A scheduler observation captured before interruption must not route the replacement.
+        self.p.observe(before)
+        self.assertEqual('write', self.p.show('one')['stage'])
+        self.finish('one', 'ready')
+        self.p.tick()
+        self.assertEqual('review', self.p.show('one')['stage'])
+
+    def test_interrupt_lost_response_reconciles_without_duplicate_worker(self):
+        from unittest.mock import patch
+        self.p.add('one', 'Task', 'Body')
+        self.p.tick()
+        actual = self.p.agent.interrupt
+        def lose_response(*args):
+            actual(*args)
+            raise TeamError('response lost')
+        with patch.object(self.p.agent, 'interrupt', side_effect=lose_response):
+            with self.assertRaises(TeamError):
+                self.p.interrupt('one', 'Correction')
+        self.p = Pipeline(self.load_config())
+        self.p.tick()
+        self.assertEqual('interrupting', self.p.show('one')['state'])
+        self.assertEqual(2, len(self.jobs()))
+        with self.assertRaises(TeamError):
+            self.p.interrupt('one', 'Different correction')
+        self.p.interrupt('one', 'Correction')
+        self.assertEqual('running', self.p.show('one')['state'])
+        self.assertEqual(2, len(self.jobs()))
+
     def test_minimal_config_limits_concurrency_and_times_out_stalled_attempts(self):
         self.config = self.repo / 'pipeline.json'
         self.definition = {'stages': {'work': {

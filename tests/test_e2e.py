@@ -90,6 +90,52 @@ class Harness(unittest.TestCase):
 
 
 class TestLifecycle(Harness):
+    def test_interrupt_stops_worker_resumes_session_and_deduplicates(self):
+        import signal
+        _, out, _ = self.run_cli('start', 'codex', 'SLOW original', '--options-json',
+                                 '{"reasoning_effort":"low"}', '--json')
+        first = json.loads(out)
+        deadline = time.time() + 5
+        while not self.status(first['job']).get('native_session_id'):
+            self.assertLess(time.time(), deadline)
+            time.sleep(.05)
+        original = self.status(first['job'])
+        _, out, _ = self.run_cli('interrupt', first['job'], 'Use the existing parser',
+                                 '--request-id', 'correction-1', '--json')
+        replacement = json.loads(out)
+        self.assertEqual('cancelled', self.status(first['job'])['status'])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(original['pid'], 0)
+        self.assertEqual(original['native_session_id'], replacement['native_session_id'])
+        self.assertEqual(original['options'], replacement['options'])
+        self.assertEqual(first['job'], replacement['followup_of'])
+        self.wait_terminal(replacement['job'])
+        _, result, _ = self.run_cli('read', replacement['job'])
+        self.assertIn('Use the existing parser', result)
+        _, repeated, _ = self.run_cli('interrupt', first['job'], 'Use the existing parser',
+                                      '--request-id', 'correction-1', '--json')
+        self.assertEqual(replacement['job'], json.loads(repeated)['job'])
+        self.assertEqual([], self.queued())
+        code, _, _ = self.run_cli('interrupt', first['job'], 'different', check=False)
+        self.assertNotEqual(0, code)
+
+    def test_interrupt_claude_resumes_the_same_session(self):
+        first = self.start('claude', 'HANG until corrected')
+        original = self.status(first)
+        _, out, _ = self.run_cli('interrupt', first, 'Continue with the corrected task', '--json')
+        replacement = json.loads(out)
+        self.assertEqual(original['native_session_id'], replacement['native_session_id'])
+        self.assertEqual('cancelled', self.status(first)['status'])
+        self.assertEqual('succeeded', self.wait_terminal(replacement['job'])['status'])
+        _, result, _ = self.run_cli('read', replacement['job'])
+        self.assertIn('Continue with the corrected task', result)
+
+    def test_interrupt_rejects_session_delivery(self):
+        _, out, _ = self.run_cli('notify', 'codex:manager', '--message', 'hello', '--json')
+        delivery = json.loads(out)
+        code, _, _ = self.run_cli('interrupt', delivery['job'], 'correction', check=False)
+        self.assertNotEqual(0, code)
+
     def test_codex_options_are_recorded_passed_and_inherited_by_followup(self):
         options = {'reasoning_effort': 'low', 'service_tier': 'priority'}
         _, out, _ = self.run_cli('start', 'codex', 'option test', '--options-json',
