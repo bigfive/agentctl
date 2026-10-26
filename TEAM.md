@@ -7,6 +7,8 @@ outcome routes control concurrency and progression.
 Requires Python 3 and Git, using only the Python standard library.
 Configuration files use JSON. Run it through `bin/agentctl-team`.
 
+New to the runner? Start with [the introduction and minimal example](GETTING_STARTED.md).
+
 ## Initialize a project
 
 ```sh

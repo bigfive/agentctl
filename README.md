@@ -235,11 +235,12 @@ replaced via the `AGENTCTL_*_BIN` overrides, so no agent credits are spent.
 
 ## Deterministic delivery scheduler
 
-`agentctl-team` is a separate application in this repository. It runs configurable
-LLM stages over backlog items through agentctl's public CLI. Each item keeps one
-branch and worktree across stages; prompts, prepared scripts, pools and outcome
-routes are configured explicitly. Read [TEAM.md](TEAM.md) for configuration,
-reporting, recovery and the real-worker poem example.
+`agentctl-team` runs backlog items through implementation, review, and integration
+stages. It tracks handoffs and reports, keeps each task in its own branch and
+worktree, and limits concurrent workers through configured pools.
+
+Start with [the problem and a runnable example](GETTING_STARTED.md).
+See [TEAM.md](TEAM.md) for the configuration and command reference.
 
 ### Experimental Codex notification steering
 
