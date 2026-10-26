@@ -3,6 +3,7 @@ import json
 import shutil
 from pathlib import Path
 from .ports import TeamError, run
+from .messages import DEFAULTS
 
 
 def initialize(config_path, repo, model):
@@ -22,7 +23,8 @@ def initialize(config_path, repo, model):
     if not config_path.parent.is_dir():
         raise TeamError('config parent directory must already exist')
     directory = config_path.with_name(config_path.stem + '-stages')
-    if config_path.exists() or directory.exists():
+    notices = config_path.with_name(config_path.stem + '-notifications')
+    if config_path.exists() or directory.exists() or notices.exists():
         raise TeamError('init refuses to overwrite config or stage directory')
     policies = {
         'work': 'Implement the issue, preserving existing behavior. Run relevant checks and commit application changes on this item branch. Report ready, or blocked with the concrete obstacle. Do not modify the root checkout.',
@@ -31,6 +33,9 @@ def initialize(config_path, repo, model):
     }
     stages = {}
     try:
+        notices.mkdir()
+        for kind, template in DEFAULTS.items():
+            (notices / (kind + '.md')).write_text(template)
         directory.mkdir()
         for name, policy in policies.items():
             files = directory / name
@@ -65,7 +70,8 @@ def initialize(config_path, repo, model):
         config = dict(repo=str(repo), base_branch=branch, agentctl=binary,
                       worktrees=str(Path.home() / '.agentctl-team/worktrees' / __import__('hashlib').sha256(str(repo).encode()).hexdigest()[:12]),
                       poll_seconds=2, pools={'agents': 8, 'integration': 1}, entry='work', stages=stages,
-                      human_wait_timeout_seconds=1800,
+                      human_wait_timeout_seconds=1800, watchdog={'interval_seconds': 5},
+                      notification_templates={kind: str((notices / (kind + '.md')).relative_to(config_path.parent)) for kind in DEFAULTS},
                       launch_message='Read .agentctl-team/brief.md for your role. Run .agentctl-team/read-issue.sh for task context. Update .agentctl-team/report.md and run .agentctl-team/submit-report.sh when finished.')
         with config_path.open('x') as handle:
             json.dump(config, handle, indent=2)

@@ -799,5 +799,146 @@ class PipelineTest(unittest.TestCase):
 
 
 
+    def test_summary_observes_live_jobs_and_handoffs_without_dispatching(self):
+        from agentctl_team.inspection import summary
+        self.p.add('active', 'Active poem', 'Body')
+        self.p.tick()
+        before = self.p.store.path.read_bytes()
+        result = summary(self.p)
+        self.assertIn(self.jobs()[0]['job'], result)
+        self.assertIn('elapsed', result)
+        self.assertEqual(before, self.p.store.path.read_bytes())
+        self.assertEqual(1, len(self.jobs()))
+        with self.p.store.transaction() as state:
+            state['tasks']['active'].update(state='error', error='credential expired')
+        result = subprocess.run([str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
+                                 'status', '--summary'], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('credential expired', result.stdout)
+        self.assertEqual(1, len(self.jobs()))
+
+    def test_summary_does_not_trust_stale_running_label(self):
+        from agentctl_team.inspection import summary
+        self.p.begin_run()
+        self.assertIn('unexpectedly missing', summary(self.p))
+        with self.p.store.lock('scheduler', blocking=False):
+            self.assertIn('Runner: alive', summary(self.p))
+
+    def test_notification_templates_are_editable_and_report_braces_are_literal(self):
+        template = self.root / 'notice.md'
+        template.write_text('From {{ source_stage }} to {{ stage }}: {{ context }}\nInspect {{ status_command }}')
+        self.definition['notification_templates'] = {'human': str(template)}
+        self.definition['entry'] = 'manager'
+        self.definition['stages']['manager'] = {'type': 'human', 'outcomes': {'finish': 'done'}}
+        self.enable_notifications()
+        self.p.add('one', 'Literal {{ placeholder }}', 'Body')
+        self.p.tick()
+        notice = next(iter(self.p.store.load()['notifications'].values()))
+        self.assertIn('Literal {{ placeholder }}', notice['message'])
+        self.assertIn('From manager to manager', notice['message'])
+        self.assertIn('status --summary', notice['message'])
+        self.assertEqual('sent', notice['state'])
+
+    def test_invalid_notification_templates_and_watchdog_values_fail(self):
+        template = self.root / 'notice.md'
+        for value in ('', '{{ unknown_variable }}', '{{ broken'):
+            template.write_text(value)
+            self.definition['notification_templates'] = {'human': str(template)}
+            self.write_config()
+            with self.assertRaises(TeamError):
+                self.load_config()
+        self.definition.pop('notification_templates')
+        for value in (None, {}, {'interval_seconds': 0}, {'interval_seconds': '5'}):
+            self.definition['watchdog'] = value
+            self.write_config()
+            with self.assertRaises(TeamError):
+                self.load_config()
+
+    def test_watchdog_reports_sigkill_once_and_preserves_surviving_work(self):
+        self.definition['watchdog'] = {'interval_seconds': .05}
+        self.enable_notifications()
+        self.p.add('one', 'Keep this work', 'Body')
+        process = subprocess.Popen([str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
+                                    'start', '--notify', self.notify_target],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 8
+            while self.p.show('one')['state'] != 'running':
+                if process.poll() is not None or time.monotonic() > deadline:
+                    self.fail('runner did not launch')
+                time.sleep(.02)
+            item = self.p.show('one')
+            artifact = Path(item['worktree']) / 'unfinished.txt'
+            artifact.write_text('preserve me')
+            process.kill()
+            process.communicate(timeout=5)
+            while True:
+                state = self.p.store.load()
+                run = next(iter(state['runs'].values()))
+                notice = state.get('notifications', {}).get(run.get('notification'))
+                if notice and notice['state'] == 'sent':
+                    break
+                if time.monotonic() > deadline:
+                    self.fail('watchdog did not report runner death')
+                time.sleep(.02)
+            self.assertEqual('lost', run['state'])
+            self.assertEqual('runner-lost', notice['kind'])
+            self.assertEqual('running', self.jobs()[0]['status'])
+            self.assertEqual('running', self.p.show('one')['state'])
+            self.assertEqual('preserve me', artifact.read_text())
+            from agentctl_team.watchdog import observe
+            self.assertFalse(observe(self.p, run['id']))
+            self.assertEqual(1, len(json.loads(self.fake.read_text())['notifies']))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_watchdog_never_alerts_for_normal_recorded_stop(self):
+        from agentctl_team.watchdog import observe
+        self.enable_notifications()
+        run = self.p.begin_run()
+        self.p.runner_stopped(run, 'completed')
+        self.assertFalse(observe(self.p, run))
+        self.assertEqual(['runner-stopped'], [n['kind'] for n in self.p.store.load()['notifications'].values()])
+
+    def test_notification_transport_metadata_is_visible_in_summary(self):
+        from agentctl_team.inspection import summary
+        self.enable_notifications()
+        with self.p.store.transaction() as state:
+            notice = self.p.queue_notification(state, None, None, 'runner-stopped', 'Completed')
+            state['notifications'][notice].update(state='sent', transport={
+                'transport': 'codex queue', 'steer_warning': 'incompatible experimental protocol'})
+        result = summary(self.p)
+        self.assertIn('codex queue', result)
+        self.assertIn('incompatible experimental protocol', result)
+
+
+    def test_completion_notice_uses_its_specific_configured_template(self):
+        template = self.root / 'completed.md'
+        template.write_text('Completion from {{ source_stage }}: {{ context }}')
+        self.definition['notification_templates'] = {'runner-completed': str(template)}
+        self.enable_notifications()
+        identifier = self.p.begin_run()
+        self.p.runner_stopped(identifier, 'completed')
+        notice = next(iter(self.p.store.load()['notifications'].values()))
+        self.assertIn('Completion from runner:', notice['message'])
+        self.assertEqual('runner-stopped', notice['kind'])
+        self.assertEqual('sent', notice['state'])
+
+    def test_summary_surfaces_original_error_after_human_routing(self):
+        from agentctl_team.inspection import summary
+        self.definition['stages']['write']['on_error'] = 'manager'
+        self.definition['stages']['manager'] = {'type': 'human', 'outcomes': {'finish': 'done'}}
+        self.write_config()
+        self.p = Pipeline(self.load_config())
+        self.p.add('one', 'One', 'Body')
+        self.p.tick()
+        self.p.fail('one', 'credentials expired')
+        self.p.tick()
+        self.assertEqual('waiting-human', self.p.show('one')['state'])
+        self.assertIn('credentials expired', summary(self.p))
+
+
 if __name__ == '__main__':
     unittest.main()

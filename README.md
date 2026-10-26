@@ -124,7 +124,7 @@ itself is restarted; the job remains durable and is still available through
 
 | Harness | Child runs as | Completion delivered by |
 |---|---|---|
-| codex | `codex exec --json` | `codex queue --thread` (queued until the thread is idle) |
+| codex | `codex exec --json` | Experimental Desktop IPC steering; queue when idle or steering fails |
 | claude | `claude -p --output-format stream-json` | Claude's own wake: `agentctl wait`, or `wait --rewake` from an `asyncRewake` hook |
 | cursor | `cursor-agent -p` on a new chat | `cursor-agent -p --resume` — terminal (`cursor-agent`) chats only |
 | opencode | `opencode run --server` on a new session | `POST /api/session/<id>/prompt` on a running server, or the optional plugin's authenticated SDK callback |
@@ -240,3 +240,20 @@ LLM stages over backlog items through agentctl's public CLI. Each item keeps one
 branch and worktree across stages; prompts, prepared scripts, pools and outcome
 routes are configured explicitly. Read [TEAM.md](TEAM.md) for configuration,
 reporting, recovery and the real-worker poem example.
+
+### Experimental Codex notification steering
+
+UUID notification targets first try the running Desktop window through
+`$CODEX_HOME/ipc/ipc.sock` (or `~/.codex/ipc/ipc.sock` when `CODEX_HOME` is absent).
+The internal, versioned Desktop follower protocol forwards to `turn/steer`,
+including active-turn selection and turn-id race handling. Exact session-name
+targets retain CLI queue delivery. `AGENTCTL_CODEX_IPC_SOCKET` explicitly selects
+an alternative Desktop IPC socket, including for isolated tests.
+
+An idle-turn rejection uses `codex queue`. Any experimental steering error or
+invalid response also falls back to queue, with a warning on stderr/daemon logs
+and `steer_warning` in the delivery result. If the steer was accepted but its
+reply was lost, fallback can deliver a duplicate. This is deliberate best-effort
+behavior; successful steering is never also queued. Queue failures remain errors.
+The Desktop IPC interface is internal and may change independently of the public
+app-server API.

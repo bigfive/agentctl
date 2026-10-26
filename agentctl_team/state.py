@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 
-from .ports import TeamError, run
+from .ports import TeamError, LockHeldError, run
 
 class Store:
     def __init__(self, config):
@@ -59,11 +59,20 @@ class Store:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
             except BlockingIOError as exc:
-                raise TeamError('%s lock is held by another process' % name) from exc
+                raise LockHeldError('%s lock is held by another process' % name) from exc
             try:
                 yield
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def lock_held(self, name):
+        with (self.root / (name + '.lock')).open('a') as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            return False
 
     @contextlib.contextmanager
     def transaction(self):

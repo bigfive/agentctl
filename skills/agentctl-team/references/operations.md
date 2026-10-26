@@ -43,8 +43,9 @@ previously caused missing-credential failures. Do not copy credentials, silently
 switch providers, or restart a shared daemon. An isolated `AGENTCTL_HOME` can be
 used for an authorized experiment; use that same value for its worker backend.
 
-**After confirming startup, end the manager turn when there is no other work.**
-Codex notifications queue until the turn settles. Do not keep the turn open by
+**After confirming startup and completing available manager actions, end the turn
+when waiting for workers or the user.** Experimental Desktop steering can deliver
+mid-turn; queue fallback needs the turn to settle. Do not keep the turn open by
 polling or waiting for notifications. Harnesses differ: transport acceptance
 alone is not proof of visible delivery. Test the intended destination when new.
 
@@ -75,8 +76,30 @@ agentctl-team --config FILE notification list
 agentctl-team --config FILE notification acknowledge NOTICE_ID --note "Inspected and handled manually"
 ```
 
-Runner exits attempt a separate stop notification; SIGKILL/machine crashes
-cannot guarantee one. Failed/uncertain deliveries stop loudly and are never
+Runner exits attempt a separate stop notification. An independent watchdog
+reports runner disappearance after SIGKILL or another abrupt exit while the
+watchdog and machine remain alive. A machine crash or killing both processes
+cannot guarantee an alert. It never restarts or cancels work. Failed/uncertain deliveries stop loudly and are never
 automatically resent. Inspect recipient and transport records before resolving.
 Acknowledgement does not resend or resolve an item.
 
+
+## Status and watchdog
+
+`status --summary` reads current scheduler-lock ownership, unfinished stage
+counts, manager handoffs, active job status/elapsed time, and recent/unresolved
+notification transport results. Missing transport metadata in older agentctl
+results is shown as unavailable. It does not change jobs or workflow state.
+
+With notifications enabled, normal `start` arms a detached watchdog before
+launching workers. `--once` is diagnostic and does not arm it;
+`--no-notifications` explicitly disables alerts and the watchdog. Startup fails
+if watchdog arming cannot be confirmed. `watchdog.interval_seconds` is optional
+and defaults to 5 seconds; invalid values fail validation.
+
+The watchdog records an unexpected exit only after the scheduler lock is free
+and no normal stop was recorded. It queues one durable `runner-lost` notice and
+never retries ambiguous delivery. Normal stops disarm it. A restarted runner
+supersedes an older run record rather than allowing its old monitor to report
+the new run as lost. Per-run watchdog config snapshots and logs remain under
+the Git common directory's `agentctl-team/` folder for diagnosis.

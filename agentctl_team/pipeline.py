@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .ports import Agentctl, TERMINAL, TeamError, run
 from .state import Store
+from .messages import load_templates
 
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 VARIABLE = re.compile(r"{{\s*([a-z_]+)\s*}}")
@@ -24,10 +25,10 @@ def render(text, values):
         if key not in values:
             raise TeamError('unknown template variable: ' + key)
         return str(values[key])
-    value = VARIABLE.sub(replace, text)
-    if '{{' in value or '}}' in value:
+    residue = VARIABLE.sub('', text)
+    if '{{' in residue or '}}' in residue:
         raise TeamError('invalid template expression')
-    return value
+    return VARIABLE.sub(replace, text)
 
 
 def positive(value, name):
@@ -110,12 +111,20 @@ def config_load(path, notify=None):
         raise TeamError('notifications moved to start --notify HARNESS:NATIVE-SESSION-ID; remove notifications from config')
     required = {'repo', 'base_branch', 'agentctl', 'worktrees', 'poll_seconds',
                 'pools', 'stages', 'entry', 'launch_message'}
-    if not isinstance(config, dict) or not required <= set(config) or set(config) - required - {'human_wait_timeout_seconds'}:
+    if not isinstance(config, dict) or not required <= set(config) or set(config) - required - {'human_wait_timeout_seconds', 'notification_templates', 'watchdog'}:
         raise TeamError('config requires exactly: ' + ', '.join(sorted(required)))
     # Optional timeout defaults to the agreed 30 minutes; null waits indefinitely.
     config.setdefault('human_wait_timeout_seconds', 1800)
     if config['human_wait_timeout_seconds'] is not None:
         positive(config['human_wait_timeout_seconds'], 'human_wait_timeout_seconds')
+    # These are documented optional defaults, not recovery from invalid input.
+    config.setdefault('watchdog', {'interval_seconds': 5})
+    watchdog = config['watchdog']
+    if not isinstance(watchdog, dict) or set(watchdog) != {'interval_seconds'}:
+        raise TeamError('watchdog requires exactly interval_seconds')
+    positive(watchdog['interval_seconds'], 'watchdog.interval_seconds')
+    config['_notification_templates'] = load_templates(
+        config.get('notification_templates', {}), path.parent, render)
     config['_path'] = str(path)
     for key in ('repo', 'worktrees', 'agentctl'):
         if not isinstance(config[key], str) or not config[key]:
@@ -459,7 +468,7 @@ class Pipeline:
         lines = ["[Message from: 'agentctl-team " + source_stage + "']", '']
         subject = '“' + item['title'] + '” (' + item['id'] + ')'
         if kind == 'human':
-            lines += [subject + ' needs your input before it can continue.', '']
+            lines += [subject + ' needs manager action before it can continue.', '']
             if item.get('transitions') and item['transitions'][-1]['kind'] == 'execution-error':
                 lines += ['The previous execution failed:', item['transitions'][-1]['reason'], '']
             elif overflow:
@@ -488,9 +497,22 @@ class Pipeline:
             lines += [subject + ' is on hold.', '', explanation, '',
                       'Read the issue and previous reports:', prefix + ' issue show ' + item['id'], '',
                       'After resolving the cause, retry:', prefix + ' issue retry ' + item['id']]
-        self.queue_notification(state, item['id'], item['stage'], kind, '\n'.join(lines))
+        self.queue_notification(state, item['id'], item['stage'], kind, '\n'.join(lines), source_stage=source_stage)
 
-    def queue_notification(self, state, item_id, stage, kind, body):
+    def queue_notification(self, state, item_id, stage, kind, body, source_stage=None, template_kind=None):
+        command = shlex.quote(str(Path(__file__).parents[1] / 'bin' / 'agentctl-team'))
+        prefix = command + ' --config ' + shlex.quote(self.config['_path'])
+        item = state['tasks'].get(item_id) if item_id is not None else None
+        definition = item['attempt']['definition'] if item and item.get('attempt') else None
+        values = dict(context=body, source_stage=source_stage or stage or 'runner', item_id=item_id or '',
+                      title=item['title'] if item else '', stage=stage or '',
+                      outcomes=', '.join(definition['outcomes']) if definition else '',
+                      issue_command=prefix + ' issue show ' + shlex.quote(item_id) if item_id else '',
+                      report_command=prefix + ' issue report ' + shlex.quote(item_id) + ' --file REPORT.md' if item_id else '',
+                      status_command=prefix + ' status --summary',
+                      start_command=prefix + ' start --notify ' + shlex.quote(self.config['notifications']['target']),
+                      reason=body if item is None else '', error=item.get('error') or '' if item else '')
+        body = render(self.config['_notification_templates'][template_kind or kind], values)
         identifier = 'notice_' + uuid.uuid4().hex
         fence = '`' * max(3, max((len(match[0]) for match in re.finditer(r'`+', body)), default=0) + 1)
         state.setdefault('notifications', {})[identifier] = dict(
@@ -503,7 +525,13 @@ class Pipeline:
     def begin_run(self):
         identifier = 'run_' + uuid.uuid4().hex
         with self.store.transaction() as state:
-            state.setdefault('runs', {})[identifier] = dict(id=identifier, state='running', started=time.time())
+            # Holding the scheduler lock proves no earlier scheduler still owns it.
+            for old in state.setdefault('runs', {}).values():
+                if old['state'] == 'running':
+                    old.update(state='superseded', finished=time.time())
+            state['runs'][identifier] = dict(id=identifier, state='running', started=time.time(),
+                pid=os.getpid(), heartbeat=time.time(),
+                notify_target=self.config.get('notifications', {}).get('target'))
         return identifier
 
     def runner_stopped(self, identifier, reason, error=None):
@@ -543,9 +571,13 @@ class Pipeline:
                 if reason != 'completed':
                     command = shlex.quote(str(Path(__file__).parents[1] / 'bin' / 'agentctl-team'))
                     prefix = command + ' --config ' + shlex.quote(self.config['_path'])
-                    lines += ['Read the backlog:', prefix + ' issue list', '',
-                              'After taking the required action, start the runner again to continue:', prefix + ' start --notify ' + shlex.quote(self.config['notifications']['target'])]
-                notice = self.queue_notification(state, None, None, 'runner-stopped', '\n'.join(lines))
+                    lines += ['Read the backlog:', prefix + ' status --summary']
+                    if reason in ('waiting', 'human-wait-timeout', 'execution-error', 'fatal-error'):
+                        lines += ['', 'To continue after resolving the cause (if still appropriate):', prefix + ' start --notify ' + shlex.quote(self.config['notifications']['target'])]
+                template_kind = ('runner-completed' if reason == 'completed' else
+                                 'runner-error' if reason in ('execution-error', 'fatal-error') else
+                                 'human-wait-timeout' if reason == 'human-wait-timeout' else 'runner-stopped')
+                notice = self.queue_notification(state, None, None, 'runner-stopped', '\n'.join(lines), template_kind=template_kind)
                 record['notification'] = notice
         self.store.event('runner-stopped', run=identifier, reason=reason, error=error)
         if notice:
@@ -611,7 +643,8 @@ class Pipeline:
                     raise TeamError('notification ' + identifier + ' failed: ' + str(exc) +
                                     '; delivery may be ambiguous; inspect before acknowledgement') from exc
                 with self.store.transaction() as state:
-                    state['notifications'][identifier].update(state='sent', job=result['job'], sent=time.time())
+                    state['notifications'][identifier].update(state='sent', job=result['job'], sent=time.time(),
+                        transport=result.get('transport_delivery'))
                 self.store.event('notified', notification=identifier, item=record['item'], job=result['job'])
 
     def stage_attempts(self, item, stage):

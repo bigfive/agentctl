@@ -105,13 +105,14 @@ class Daemon(object):
             job = record["job"]
             store.update(job, status=store.RUNNING, started_at=store.now())
             try:
-                adapter.deliver(native, prompt, "followup-" + job)
+                transport_result = adapter.deliver(native, prompt, "followup-" + job)
             except Exception as exc:
                 store.update(job, status=store.FAILED, error=str(exc),
                              finished_at=store.now())
                 raise
             store.write_result(job, "Message accepted by session transport; subsequent agent work is not tracked.")
-            return store.update(job, status=store.SUCCEEDED, finished_at=store.now())
+            return store.update(job, status=store.SUCCEEDED, finished_at=store.now(),
+                                transport_delivery=transport_result)
         with self.operation_lock:
             return self._operation(request_id, {"session": target, "prompt": prompt}, deliver)
 
@@ -360,7 +361,7 @@ class Daemon(object):
         try:
             adapter = notify.get(harness)
             adapter.validate(target_id)
-            adapter.deliver(target_id, message, notification_id)
+            transport_result = adapter.deliver(target_id, message, notification_id)
         except AgentctlError as exc:
             log("delivery failed for %s -> %s:%s: %s"
                 % (job_id, harness, target_id, exc.message))
@@ -375,7 +376,7 @@ class Daemon(object):
                                error="unexpected delivery error: %s" % exc)
             return
         store.set_delivery(job_id, wait_id, store.DELIVERED,
-                           notification_id=notification_id)
+                           notification_id=notification_id, result=transport_result)
         log("delivered %s for %s to %s:%s"
             % (notification_id, job_id, harness, target_id))
 

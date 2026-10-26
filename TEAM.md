@@ -18,7 +18,8 @@ agentctl-team --config /path/to/pipeline.json start --notify codex:NATIVE-SESSIO
 ```
 
 The config parent directory must exist. `init` creates the config and a sibling
-`pipeline-stages/` directory, refusing to overwrite either. It creates no jobs,
+`pipeline-stages/` directory plus editable `pipeline-notifications/` templates,
+refusing to overwrite any of them. It creates no jobs,
 worktrees, or backlog items. `--repo` defaults to the current directory;
 `--model` defaults to `gpt-6-luna`. The checked-out branch becomes the explicit
 base branch. Review generated prompts before starting: the starter uses eight
@@ -345,9 +346,11 @@ plus integrate/cancel. `issue retry` itself still never resets counts.
 
 `start` prints manager guidance to stderr immediately after startup validation,
 with flushing so it is visible even when output is captured. Its stdout remains
-JSON. With notifications enabled, the guidance tells an LLM manager to end its
-turn when it has no other work, rather than polling or waiting for queued
-notifications. On receipt, read the issue/history, act, and end the turn again.
+JSON. With notifications enabled, the guidance tells the manager to complete
+available authorized actions, confirm continuation, and settle when waiting for
+workers or a necessary user decision. Experimental Codex steering may deliver
+mid-turn; queued fallback needs an idle turn. Launching does not complete the
+user request.
 `start --daemon` also warns that it stays running and should be launched as a
 background process or service, rather than awaited inside a manager turn.
 
@@ -383,9 +386,16 @@ requested stop, completed drain/cancellation, diagnostic `--once` exit,
 SIGINT/SIGTERM, and handled runtime or startup-validation errors. The message
 identifies any workers still running and tells the manager to restart the
 runner after resolving outstanding work. A second stop call for the same run
-does not create another alert. SIGKILL, process/machine crashes, invalid config
-that cannot be loaded, and failure to acquire the scheduler lock cannot reliably
-send a stop notification. No external supervisor is installed.
+does not create another alert. With notifications enabled, normal `start` arms
+an independent watchdog before launching workers. If the scheduler lock is
+released without a recorded stop, it sends one durable `runner-lost` alert and
+preserves all jobs/worktrees. It does not restart, cancel, or repair work.
+`watchdog.interval_seconds` optionally sets its poll interval (default 5 seconds).
+Invalid values fail validation. `--once` and `--no-notifications` do not arm it.
+Normal stops disarm it; per-run snapshots/logs remain in the state directory.
+Killing both processes or crashing the machine cannot guarantee an alert.
+Invalid config that cannot load and failure to acquire the scheduler lock also
+cannot send a stop notification.
 
 Stop-alert failures are recorded and exit nonzero. An existing failed alert is
 not retried merely to send the separate runner-stopped alert. If both the runner
@@ -477,3 +487,30 @@ the original error in attempt/item history and route there without inventing
 a report. With no `on_error`, the item stays in error as before. Uncertain
 launches or status failures retain active ownership and stop loudly; they do
 not route while a worker may still be running.
+
+## Manager inspection and editable notifications
+
+`agentctl-team --config FILE status --summary` reports actual scheduler-lock
+ownership, item/stage counts, manager handoffs with recent reports/errors,
+active job status and elapsed time, and recent/unresolved notification delivery.
+It observes jobs through agentctl but does not dispatch or change workflow state.
+A stale running record with a free scheduler lock is reported as unexpectedly
+missing. Raw `status` JSON remains unchanged as a command interface.
+
+Optional `notification_templates` maps notification kinds to Markdown files
+relative to the config. Supported kinds: `human`, `error`, `held`,
+`runner-completed`, `runner-error`, `human-wait-timeout`, `runner-stopped`,
+`runner-lost`. Missing kinds use built-in defaults; configured empty, missing, or
+invalid templates fail validation. `init` writes all templates for editing.
+Restart the runner to apply edits; a watchdog retains its launch configuration.
+
+Templates can use `{{ context }}` for factual context plus action commands,
+`{{ source_stage }}`, `{{ item_id }}`, `{{ title }}`, `{{ stage }}`,
+`{{ outcomes }}`, `{{ issue_command }}`, `{{ report_command }}`,
+`{{ status_command }}`, `{{ start_command }}`, `{{ reason }}`, `{{ error }}`.
+Item fields are empty for runner notices. `reason` is the runner context for
+runner notices; `error` is the current item error when present. Substitution is
+single-pass, and rendered messages stay fenced as plain text. The outbox's
+`kind` remains `runner-stopped` for normal runner exits regardless of selected
+completion/failure/timeout template. Transport metadata, including experimental
+steering fallback warnings, is retained when agentctl returns it.

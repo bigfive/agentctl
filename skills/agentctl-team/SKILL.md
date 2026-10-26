@@ -5,10 +5,10 @@ description: Configure and operate agentctl-team backlog pipelines, launch worke
 
 # agentctl-team
 
-The runner schedules work; configured prompts/scripts define delivery policy.
-Use the user's chosen model and scope. Read [pipeline configuration](references/pipeline.md)
-when initializing or editing stages; read [operations](references/operations.md)
-for detailed session discovery, harness limitations, or failure recovery.
+The runner schedules; configured stages define delivery policy. Use the user's
+chosen model and scope. Read [manager responsibilities](references/manager.md)
+when launching or handling notifications. Read [pipeline configuration](references/pipeline.md)
+when editing stages and [operations](references/operations.md) for session discovery or recovery.
 
 ## Start
 
@@ -19,37 +19,37 @@ agentctl-team --config FILE issue add --id ID --title TITLE --body-file BODY.md
 agentctl-team --config FILE start --notify codex:VERIFIED_NATIVE_SESSION_ID
 ```
 
-Review generated prompts, model, base branch and integration policy before
-launching. Each item keeps one branch/worktree; every LLM execution is fresh.
+Review generated prompts, model, base branch, and integration policy. Put task
+scope in issue bodies; shared stage prompts apply to every item. Each item
+keeps one branch/worktree; every LLM execution is fresh. Keep concurrent manager
+changes out of the integration checkout.
 
-For Codex, inspect `CODEX_THREAD_ID` and verify it against the matching rollout's
-metadata/current conversation. If absent, inspect recent files under
-`${CODEX_HOME:-$HOME/.codex}/sessions/*/*/*/rollout-*.jsonl`; the filename ends
-with the session UUID. Never assume the newest file is yours or use an app
-conversation GUID. See operations for other harnesses. If discovery fails,
-report the blocker; do not silently opt out. `--no-notifications` requires an
-explicit user choice. Supply `--notify` again on every restart.
+For Codex, inspect `CODEX_THREAD_ID` and verify it belongs to this conversation.
+If absent, follow operations' session lookup; never assume the newest session
+is yours or substitute an app GUID. Other harnesses have different delivery
+limits. Failed discovery is a blocker; `--no-notifications` requires an explicit
+user choice. Supply `--notify` on every restart.
 
-Launch detached with retained logs. Confirm startup, then **end your turn** when
-there is no other work: queued notifications arrive after the turn settles.
-Do not keep the turn open by polling or waiting for notifications.
+Launch detached with retained logs. Confirm startup and complete available
+manager actions, then end your turn when waiting for workers or a necessary
+user decision. Steering can arrive mid-turn; queued delivery needs a settled
+turn. Do not poll to keep a turn open. Launching does not complete the request.
 
 ## Respond
 
-Read current state before acting; queued alerts may be stale:
-
 ```sh
+agentctl-team --config FILE status --summary
 agentctl-team --config FILE issue show ID
 agentctl-team --config FILE issue report ID --file REPORT.md
 ```
 
-For a human stage, submit Markdown front matter `outcome: DECLARED_OUTCOME`
-between `---` lines, followed by the resolution. The active runner continues
-automatically; it normally waits up to 30 minutes for human input. End the turn
-again after responding. Never restart solely because an old stop alert arrived.
+Inspect current state; alerts may be stale. Human stages require manager action,
+not necessarily a user decision. Resolve authorized actions, submit Markdown
+front matter `outcome: DECLARED_OUTCOME` between `---` lines plus the resolution,
+and confirm the intended next state. The runner normally waits 30 minutes and
+continues automatically after a report.
 
-Fail visibly and preserve work/history. Don't invent reports, edit ledger state,
-or start duplicate workers to bypass errors. Use configured human outcomes for
-item-specific resolution; reset-enabled routes reset only the destination-stage
-count for that item. `issue retry` does not reset counts. Verify delivered
-behavior and checks before claiming completion, not just a `done` label.
+Preserve work/history. Never invent reports, edit ledger state, or duplicate
+workers. Use configured human outcomes for item-specific recovery; `issue retry`
+does not reset counts. Verify delivered behavior and checks, then communicate
+the outcome and limitations. A `done` label alone is not proof.

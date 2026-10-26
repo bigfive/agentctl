@@ -30,6 +30,8 @@ class Harness(unittest.TestCase):
             "AGENTCTL_CLAUDE_BIN": os.path.join(FAKES, "fake-claude"),
             "AGENTCTL_CODEX_BIN": os.path.join(FAKES, "fake-codex"),
             "FAKE_CODEX_QUEUE_LOG": self.queue_log,
+            # Harness tests must never contact the operator's Desktop.
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "absent-desktop.sock"),
         })
         self.env.pop("FAKE_DELAY", None)
         self.env.pop("FAKE_CODEX_QUEUE_FAIL", None)
@@ -189,6 +191,8 @@ class TestNotify(Harness):
         first = json.loads(out)
         self.assertEqual(first["kind"], "session_delivery")
         self.assertEqual(first["status"], "succeeded")
+        self.assertEqual(first["transport_delivery"]["transport"], "codex queue")
+        self.assertIn("steer_warning", first["transport_delivery"])
         self.run_cli("daemon", "stop")
         time.sleep(0.3)
         _, out, _ = self.run_cli(*args)

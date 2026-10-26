@@ -24,7 +24,8 @@ def parser():
     delivery.add_argument('--notify', help='required notification destination: HARNESS:NATIVE-SESSION-ID')
     delivery.add_argument('--no-notifications', action='store_true', help='explicitly disable new notifications for this invocation')
     commands.add_parser('doctor')
-    commands.add_parser('status')
+    status = commands.add_parser('status')
+    status.add_argument('--summary', action='store_true', help='runner health, manager actions, active jobs, and notification delivery')
     commands.add_parser('pause')
     commands.add_parser('resume')
     stop = commands.add_parser('stop')
@@ -93,20 +94,26 @@ def schedule(pipeline, once=False, daemon=False):
         run_id = pipeline.begin_run()
         reason, failure = None, None
         human_wait_started = None
+        watchdog = None
         try:
             pipeline.validate_start()
             pipeline.control(stop=None)
+            if 'notifications' in pipeline.config and not once:
+                from .watchdog import arm
+                watchdog = arm(pipeline, run_id)
             print('agentctl-team: runner started.', file=sys.stderr, flush=True)
             if daemon:
                 print('This command stays running. Use a background process or service manager; '
                       'do not wait on it in an LLM manager turn.', file=sys.stderr, flush=True)
             if 'notifications' in pipeline.config:
-                print('Queued notifications arrive after the manager turn settles. '
-                      'Once the runner is running and you have no other work, end your turn. '
-                      'Do not poll or wait for notifications in the active turn. '
-                      'When notified, read the issue and history, take the required action, '
-                      'then end your turn again.', file=sys.stderr, flush=True)
+                print('Notifications may steer an active Codex turn or queue until it settles. '
+                      'Complete available manager actions, confirm work resumed, then end your turn '
+                      'when waiting for workers or a necessary user decision. '
+                      'Launching the runner does not complete the user request. '
+                      'Use status --summary to inspect current state.', file=sys.stderr, flush=True)
             while not stopping:
+                with pipeline.store.transaction() as current:
+                    current['runs'][run_id]['heartbeat'] = time.time()
                 pipeline.tick()
                 state = pipeline.store.load()
                 control = state['control']['stop']
@@ -158,6 +165,11 @@ def schedule(pipeline, once=False, daemon=False):
                     raise TeamError(failure + '\nAlso failed to deliver runner-stopped notification: ' +
                                     str(notification_error)) from notification_error
                 raise
+            finally:
+                if watchdog is not None:
+                    if watchdog.poll() is None:
+                        watchdog.terminate()
+                    watchdog.wait(timeout=5)
     return pipeline.store.load()
 
 
@@ -178,7 +190,11 @@ def main(argv=None):
                 pipeline.validate_start()
             result = {'valid': True}
         elif command == 'status':
-            result = pipeline.store.load()
+            if args.summary:
+                from .inspection import summary
+                print(summary(pipeline))
+            else:
+                result = pipeline.store.load()
         elif command in ('pause', 'resume'):
             pipeline.control(paused=command == 'pause')
         elif command == 'stop':

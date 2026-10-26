@@ -181,7 +181,7 @@ def add_wait(job_id, target_harness, target_id, raw_target):
     return wait
 
 
-def set_delivery(job_id, wait_id, state, notification_id=None, error=None):
+def set_delivery(job_id, wait_id, state, notification_id=None, error=None, result=None):
     def mutator(record):
         for wait in record["waits"]:
             if wait["wait"] != wait_id:
@@ -192,6 +192,8 @@ def set_delivery(job_id, wait_id, state, notification_id=None, error=None):
             if notification_id:
                 delivery["notification_id"] = notification_id
             delivery["error"] = error
+            if result is not None:
+                delivery["result"] = result
             if state == DELIVERED:
                 delivery["delivered_at"] = now()
 

@@ -477,3 +477,21 @@ the original error in attempt/item history and route there without inventing
 a report. With no `on_error`, the item stays in error as before. Uncertain
 launches or status failures retain active ownership and stop loudly; they do
 not route while a worker may still be running.
+
+## Manager notification templates
+
+`init` writes editable `<config-stem>-notifications/*.md` files. Optional
+`notification_templates` maps any of `human`, `error`, `held`, `runner-stopped`,
+`runner-completed`, `runner-error`, `human-wait-timeout`, and `runner-lost` to a file relative to the config. Unspecified kinds use built-in
+defaults; empty, inaccessible, or invalid files fail validation. Restart a running
+runner to apply edits. Watchdogs retain the configuration captured at launch.
+
+Each template can replace the entire message and use these literal variables:
+`{{ context }}`, `{{ source_stage }}`, `{{ item_id }}`, `{{ title }}`,
+`{{ stage }}`, `{{ outcomes }}`, `{{ issue_command }}`, `{{ report_command }}`,
+`{{ status_command }}`, `{{ start_command }}`, `{{ reason }}`, `{{ error }}`.
+`context` contains the factual handoff/report and action commands. Item-specific
+fields are empty for runner notices. `reason` contains the runner's factual
+context for runner notices. `error` contains the item's current error, if any.
+Templates are single-pass: braces in report prose are data, not expressions.
+All messages are fenced as plain text to avoid accidental Markdown headings.

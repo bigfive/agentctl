@@ -7,6 +7,10 @@ class TeamError(Exception):
     pass
 
 
+class LockHeldError(TeamError):
+    pass
+
+
 def run(argv, cwd=None):
     result = subprocess.run(argv, cwd=cwd, text=True, capture_output=True)
     if result.returncode:
