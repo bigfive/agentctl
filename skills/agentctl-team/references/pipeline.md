@@ -428,6 +428,12 @@ A native harness session ID is required; a T3 conversation ID is not assumed to
 be one. Transport support and user-visible delivery depend on that harness.
 A successful `agentctl notify` confirms transport acceptance, not a human read. Notification messages use a plain-text code block so report Markdown and YAML separators cannot become headings.
 
+With `--daemon`, completing a nonempty backlog sends a `runner-completed`
+notification while the runner remains available for new items. Completion is
+recorded durably, so idle polls and daemon restarts do not repeat the alert.
+Adding more items allows a new completion alert when the backlog is fully done
+again. The message uses the configured `runner-completed` template.
+
 Every runner invocation records its start and stop under `runs` in the state
 file. With notifications enabled it attempts a separate runner-stopped message
 before exiting, including backlog completion, waiting for human or held work,

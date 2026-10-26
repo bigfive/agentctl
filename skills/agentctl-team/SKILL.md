@@ -42,6 +42,10 @@ is yours or substitute an app GUID. Other harnesses have different delivery
 limits. Failed discovery is a blocker; `--no-notifications` requires an explicit
 user choice. Supply `--notify` on every restart.
 
+With `--daemon`, the runner sends a completion alert when the backlog is fully
+done and keeps running for new items. Each new batch can produce another
+completion alert; idle polls and restarts preserve the recorded completion.
+
 Launch detached with retained logs. Confirm startup and complete available
 manager actions, then end your turn when waiting for workers or a necessary
 user decision. Steering can arrive mid-turn; queued delivery needs a settled

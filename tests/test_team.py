@@ -662,6 +662,52 @@ class PipelineTest(unittest.TestCase):
         self.write_config()
         self.p = Pipeline(self.load_config())
 
+    def test_daemon_notifies_each_completed_backlog_and_stays_available(self):
+        self.definition['stages'] = {'write': self.definition['stages']['write']}
+        self.definition['stages']['write']['outcomes'] = {'ready': 'done'}
+        self.enable_notifications()
+        def wait_for(predicate):
+            deadline = time.monotonic() + 8
+            while not predicate():
+                if process.poll() is not None:
+                    self.fail('daemon exited: ' + process.communicate()[1])
+                if time.monotonic() > deadline:
+                    self.fail('daemon did not reach expected state')
+                time.sleep(.02)
+        def completions():
+            return [notice for notice in self.p.store.load().get('notifications', {}).values()
+                    if notice['kind'] == 'runner-completed' and notice['state'] == 'sent']
+        command = [str(ROOT / 'bin/agentctl-team'), '--config', str(self.config),
+                   'start', '--daemon', '--notify', self.notify_target]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            wait_for(lambda: bool(self.p.store.load().get('runs')))
+            self.assertEqual([], completions())
+            for n in range(2):
+                item_id = 'batch' + str(n)
+                self.p.add(item_id, 'Task', 'Body')
+                wait_for(lambda: self.p.show(item_id)['state'] == 'running')
+                self.finish(item_id, 'ready')
+                wait_for(lambda: len(completions()) == n + 1)
+                self.assertEqual('done', self.p.show(item_id)['state'])
+                time.sleep(.1)
+                self.assertEqual(n + 1, len(completions()))
+                delivered = json.loads(self.fake.read_text())['notifies']
+                self.assertEqual(n + 1, len(delivered))
+                self.assertTrue(all(message['target'] == self.notify_target for message in delivered))
+                self.assertIsNone(process.poll())
+            process.terminate()
+            process.communicate(timeout=5)
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            wait_for(lambda: len(self.p.store.load().get('runs', {})) == 2)
+            time.sleep(.1)
+            self.assertEqual(2, len(completions()))
+            self.assertIsNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=5)
+
     def test_runner_completion_alert_is_durable_and_not_duplicated(self):
         self.enable_notifications()
         result = self.start_cli()

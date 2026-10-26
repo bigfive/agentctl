@@ -620,6 +620,27 @@ class Pipeline:
                 notify_target=self.config.get('notifications', {}).get('target'))
         return identifier
 
+    def backlog_completed(self, run_id):
+        notice = None
+        with self.store.transaction() as state:
+            tasks = state['tasks']
+            if not tasks or any(item['state'] != 'done' for item in tasks.values()):
+                return
+            items = sorted(tasks)
+            previous = state.get('backlog_completion')
+            if previous is not None and previous['items'] == items:
+                return
+            if 'notifications' in self.config:
+                body = ("[Message from: 'agentctl-team runner']\n\n"
+                        'All ' + str(len(items)) + ' backlog items are complete.\n'
+                        'The daemon remains running and ready for new items.')
+                notice = self.queue_notification(state, None, None, 'runner-completed', body)
+            state['backlog_completion'] = dict(items=items, run=run_id,
+                                               at=time.time(), notification=notice)
+        self.store.event('backlog-completed', run=run_id, items=items)
+        if notice:
+            self.notify_pending({notice})
+
     def runner_stopped(self, identifier, reason, error=None):
         descriptions = {
             'completed': 'all backlog items are complete',

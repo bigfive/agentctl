@@ -137,6 +137,8 @@ def schedule(pipeline, once=False, daemon=False):
                 if control in ('drain', 'cancel') and not pipeline.active(pipeline.store.load()):
                     reason = 'drained' if control == 'drain' else 'cancelled'
                     break
+                if daemon:
+                    pipeline.backlog_completed(run_id)
                 idle = pipeline.idle()
                 tasks = list(pipeline.store.load()['tasks'].values())
                 awaiting_human = idle and any(item['state'] == 'waiting-human' for item in tasks)
