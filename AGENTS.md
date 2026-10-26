@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Required standards
+
+Read and follow [CODING_STANDARDS.md](CODING_STANDARDS.md) when writing or
+reviewing changes. Its documentation review requirements are approval criteria;
+request changes for violations before approving.
+
 ## Tests
 
 Tautological tests are considered harmful. Do not add a test that cannot fail,
