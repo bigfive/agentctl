@@ -31,6 +31,8 @@ TERMINAL = (SUCCEEDED, FAILED, CANCELLED)
 
 # Delivery states for one registered wait.
 DELIVERY_PENDING = "pending"
+DELIVERY_INFLIGHT = "in_flight"
+DELIVERY_UNKNOWN = "unknown"
 DELIVERED = "delivered"
 DELIVERY_FAILED = "failed"
 
@@ -155,17 +157,26 @@ def mutate(job_id, mutator):
     return record
 
 
-def add_wait(job_id, target_harness, target_id, raw_target):
-    """Register one notification target and return the wait record."""
+def add_wait(job_id, target_harness, target_id, raw_target, timeout=None):
+    """Register one notification target and return the wait record.
+
+    ``expires_at`` is persisted because the daemon may be restarted while a
+    timed wait is outstanding.
+    """
+    registered_at = now()
     wait = {
         "wait": ids.new_wait_id(),
         "notify_harness": target_harness,
         "notify_id": target_id,
         "notify_raw": raw_target,
-        "registered_at": now(),
+        "registered_at": registered_at,
+        "timeout": timeout,
+        "expires_at": (registered_at + timeout
+                       if timeout is not None else None),
         "delivery": {
             "state": DELIVERY_PENDING,
             "notification_id": None,
+            "event": None,
             "attempted_at": None,
             "delivered_at": None,
             "error": None,
@@ -179,7 +190,8 @@ def add_wait(job_id, target_harness, target_id, raw_target):
     return wait
 
 
-def set_delivery(job_id, wait_id, state, notification_id=None, error=None):
+def set_delivery(job_id, wait_id, state, notification_id=None, error=None,
+                 event=None):
     def mutator(record):
         for wait in record["waits"]:
             if wait["wait"] != wait_id:
@@ -189,6 +201,8 @@ def set_delivery(job_id, wait_id, state, notification_id=None, error=None):
             delivery["attempted_at"] = now()
             if notification_id:
                 delivery["notification_id"] = notification_id
+            if event:
+                delivery["event"] = event
             delivery["error"] = error
             if state == DELIVERED:
                 delivery["delivered_at"] = now()

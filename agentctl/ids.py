@@ -1,12 +1,13 @@
 """Stable identifier generation.
 
-Three kinds of identifier exist and are never interchangeable:
+Four kinds of identifier exist and are never interchangeable:
 
 - job handle    ``job_<12 hex>``  an agentctl job
 - wait handle   ``wait_<12 hex>`` one registered asyncwait
+- sub handle    ``sub_<12 hex>``  one session subscription
 - notification  ``ntf_<24 hex>``  one delivery, derived deterministically so a
-                                  repeated terminal event cannot create a
-                                  second follow-up
+                                  repeated event cannot create a second
+                                  follow-up
 """
 
 import hashlib
@@ -25,15 +26,27 @@ def new_wait_id():
     return "wait_" + _token(6)
 
 
-def notification_id(wait_id, job_id, status):
-    """Derive the delivery identifier for one terminal outcome.
+def new_sub_id():
+    return "sub_" + _token(6)
 
-    The same wait reaching the same terminal status always produces the same
-    notification id, so a daemon restart or a duplicated terminal event is
-    recognised as the delivery that already happened.
+
+def notification_id_for_sub(sub_id, event):
+    """Derive the delivery identifier for one subscription event."""
+    digest = hashlib.sha256(
+        ("%s|%s" % (sub_id, event)).encode("utf-8")
+    ).hexdigest()
+    return "ntf_" + digest[:24]
+
+
+def notification_id(wait_id, job_id, event):
+    """Derive the delivery identifier for one wait event.
+
+    The same wait reaching the same event always produces the same
+    notification id, so a daemon restart or a duplicated event is recognised
+    as the delivery that already happened.
     """
     digest = hashlib.sha256(
-        ("%s|%s|%s" % (wait_id, job_id, status)).encode("utf-8")
+        ("%s|%s|%s" % (wait_id, job_id, event)).encode("utf-8")
     ).hexdigest()
     return "ntf_" + digest[:24]
 

@@ -5,7 +5,25 @@ import json, os, sys, uuid
 args = sys.argv[1:]
 record = os.environ.get("FAKE_CODEX_QUEUE_LOG", "/tmp/fake-codex-queue.log")
 
+if args[:2] == ["app-server", "proxy"]:
+    if os.environ.get("FAKE_CODEX_PROXY_FAIL"):
+        sys.stderr.write("control socket does not exist\n")
+        sys.exit(1)
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request.get("method") == "initialize":
+            print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+        elif request.get("method") == "thread/read":
+            if os.environ.get("FAKE_CODEX_PREFLIGHT_FAIL"):
+                print(json.dumps({"id": request["id"], "error": {"message": "thread not found"}}), flush=True)
+            else:
+                print(json.dumps({"id": request["id"], "result": {"thread": {"id": request["params"]["threadId"]}}}), flush=True)
+    sys.exit(0)
+
 if args and args[0] == "queue":
+    if "--help" in args:
+        print("Usage: codex queue --thread <THREAD> --message <TEXT>")
+        sys.exit(0)
     thread = args[args.index("--thread") + 1]
     message = args[args.index("--message") + 1]
     if os.environ.get("FAKE_CODEX_QUEUE_FAIL"):

@@ -33,6 +33,12 @@ class Harness(unittest.TestCase):
         })
         self.env.pop("FAKE_DELAY", None)
         self.env.pop("FAKE_CODEX_QUEUE_FAIL", None)
+        # Clear session identity vars so the real running harness session does
+        # not contaminate tests (e.g. CODEX_THREAD_ID causing unwanted subs).
+        for _var in ("CODEX_THREAD_ID", "CLAUDE_SESSION_ID",
+                     "CURSOR_SESSION_ID", "OPENCODE_SESSION_ID",
+                     "AGENTCTL_FROM"):
+            self.env.pop(_var, None)
 
     def tearDown(self):
         self.run_cli("daemon", "stop", check=False)
@@ -81,7 +87,7 @@ class Harness(unittest.TestCase):
         while time.time() < deadline:
             record = self.status(job)
             waits = record.get("waits") or []
-            if waits and waits[0]["delivery"]["state"] != "pending":
+            if waits and waits[0]["delivery"]["state"] not in ("pending", "in_flight"):
                 return waits[0]
             time.sleep(0.2)
         self.fail("delivery for %s stayed pending" % job)
@@ -193,7 +199,7 @@ class TestAsyncWait(Harness):
         while time.time() < deadline:
             record = self.status(job)
             states = [w["delivery"]["state"] for w in record["waits"]]
-            if all(state != "pending" for state in states):
+            if all(state not in ("pending", "in_flight") for state in states):
                 break
             time.sleep(0.2)
         self.assertEqual(len(self.queued()), 3,
@@ -213,6 +219,72 @@ class TestAsyncWait(Harness):
                      "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3")
         self.wait_for_delivery(job)
         self.assertIn("status: failed", self.queued()[0]["message"])
+
+    def test_timeout_notifies_while_running_and_allows_a_new_wait(self):
+        self.env["FAKE_DELAY"] = "2"
+        job = self.start("claude", "slow work")
+        target = "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3"
+        self.run_cli("asyncwait", job, "--notify", target, "--timeout", "0.5")
+
+        first = self.wait_for_delivery(job)
+        self.assertEqual(first["delivery"]["state"], "delivered")
+        self.assertEqual(first["delivery"]["event"], "timeout")
+        self.assertEqual(len(self.queued()), 1)
+        message = self.queued()[0]["message"]
+        self.assertIn("event: timeout", message)
+        self.assertIn("status: running", message)
+        self.assertIn("agentctl asyncwait %s" % job, message)
+
+        # The timeout consumes only this wait. Once the child finishes, a new
+        # asyncwait registration receives the normal terminal notification.
+        self.wait_terminal(job)
+        self.run_cli("asyncwait", job, "--notify", target)
+        deadline = time.time() + 10
+        while len(self.queued()) < 2 and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertEqual(len(self.queued()), 2)
+        self.assertIn("status: succeeded", self.queued()[1]["message"])
+
+    def test_completion_before_timeout_sends_only_completion(self):
+        self.env["FAKE_DELAY"] = "0.2"
+        job = self.start("claude", "quick work")
+        self.run_cli("asyncwait", job, "--notify",
+                     "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3",
+                     "--timeout", "1")
+
+        wait = self.wait_for_delivery(job)
+        self.assertNotEqual(wait["delivery"]["event"], "timeout")
+        self.assertIn("status: succeeded", self.queued()[0]["message"])
+        time.sleep(1)
+        self.assertEqual(len(self.queued()), 1)
+
+    def test_asyncwait_timeout_survives_daemon_restart(self):
+        self.env["FAKE_DELAY"] = "3"
+        job = self.start("claude", "slow across restart")
+        self.run_cli("asyncwait", job, "--notify",
+                     "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3",
+                     "--timeout", "1")
+        self.run_cli("daemon", "stop")
+        time.sleep(0.5)
+        self.run_cli("daemon", "start")
+
+        wait = self.wait_for_delivery(job, timeout=10)
+        self.assertEqual(wait["delivery"]["state"], "delivered")
+        self.assertEqual(wait["delivery"]["event"], "timeout")
+        self.assertEqual(len(self.queued()), 1)
+        self.assertIn("status: running", self.queued()[0]["message"])
+        self.run_cli("cancel", job)
+
+    def test_asyncwait_rejects_invalid_timeout(self):
+        job = self.start("claude", "quick")
+        for timeout in ("-1", "nan", "inf"):
+            code, _, err = self.run_cli(
+                "asyncwait", job, "--notify",
+                "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3",
+                "--timeout", timeout, check=False)
+            self.assertEqual(code, 64)
+            self.assertIn("finite, non-negative", err)
+        self.assertEqual(self.status(job)["waits"], [])
 
     def test_delivery_failure_is_recorded_and_not_retried(self):
         self.env["FAKE_CODEX_QUEUE_FAIL"] = "1"

@@ -68,7 +68,8 @@ def _cli_chat_exists(chat_id):
 
 def is_ide_chat(chat_id):
     """True when this chat belongs to the Cursor IDE rather than the CLI."""
-    return os.path.isdir(os.path.join(IDE_STORE, chat_id))
+    from ..discover import is_ide_chat as discover_ide_chat
+    return discover_ide_chat(chat_id, ide_store_root=IDE_STORE)
 
 
 class CursorNotify(NotifyAdapter):
@@ -114,7 +115,11 @@ class CursorNotify(NotifyAdapter):
         process = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
-        out, err = process.communicate(message.encode("utf-8"), timeout=300)
+        try:
+            out, err = process.communicate(message.encode("utf-8"), timeout=300)
+        except subprocess.TimeoutExpired:
+            process.kill(); process.communicate()
+            raise
         stdout = (out or b"").decode("utf-8", "replace").strip()
         stderr = (err or b"").decode("utf-8", "replace").strip()
         if process.returncode != 0:

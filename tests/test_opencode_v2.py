@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from agentctl import discover, sender
 from agentctl.children.opencode import OpenCodeChild
 from agentctl.notify.opencode import OpenCodeNotify
 
@@ -81,6 +82,42 @@ class TestOpenCodeV2Notify(unittest.TestCase):
         self.assertEqual(payload["delivery"], "queue")
         self.assertRegex(payload["id"], r"^msg_[a-f0-9]{24}$")
         self.assertNotIn("parts", payload)
+
+
+class TestOpenCodeV2Sessions(unittest.TestCase):
+    @patch("agentctl.httpc.request")
+    @patch("agentctl.config.opencode_auth_header", return_value="Basic test")
+    def test_discovery_reads_authenticated_v2_envelope(self, auth, request):
+        request.return_value = (200, {"data": [{"id": "ses_abc123", "title": "Test"}]})
+        rows = discover._opencode_sessions_http("http://localhost:4096")
+        self.assertEqual(rows[0]["native_id"], "ses_abc123")
+        self.assertEqual(request.call_args.args[1], "http://localhost:4096/api/session")
+        self.assertEqual(request.call_args.kwargs["auth_header"], "Basic test")
+
+    @patch("agentctl.httpc.request")
+    @patch("agentctl.config.opencode_auth_header", return_value="Basic test")
+    def test_history_reads_authenticated_v2_envelope(self, auth, request):
+        request.return_value = (200, {"data": [{
+            "info": {"role": "assistant"},
+            "parts": [{"type": "text", "text": "A full response"}],
+        }]})
+        history = discover._opencode_history_http("ses_abc123", 10, "http://localhost:4096")
+        self.assertEqual(history, [{"role": "assistant", "content": "A full response"}])
+        self.assertEqual(request.call_args.args[1], "http://localhost:4096/api/session/ses_abc123/message")
+        self.assertEqual(request.call_args.kwargs["auth_header"], "Basic test")
+
+    @patch("agentctl.httpc.request", return_value=(202, {}))
+    @patch("agentctl.config.opencode_auth_header", return_value="Basic test")
+    def test_send_admits_authenticated_queued_prompt(self, auth, request):
+        receipt = sender._dispatch_opencode("ses_abc123", "Continue", request_nonce="stable")
+        self.assertTrue(receipt.accepted)
+        method, url, payload = request.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertTrue(url.endswith("/api/session/ses_abc123/prompt"))
+        self.assertEqual(payload["text"], "Continue")
+        self.assertEqual(payload["delivery"], "queue")
+        self.assertEqual(payload["id"], receipt.details["message_id"])
+        self.assertEqual(request.call_args.kwargs["auth_header"], "Basic test")
 
 
 if __name__ == "__main__":

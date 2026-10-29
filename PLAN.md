@@ -11,12 +11,12 @@ The first version will implement one happy path: a background wait is registered
 An agent starts a child session using the harness-native command, captures the resulting handle, and then runs:
 
 ```bash
-agentctl asyncwait "$a" --notify codex:<thread-id>
+agentctl asyncwait "$a" --notify codex:<thread-id> [--timeout SECONDS]
 agentctl asyncwait "$a" --notify cursor:<agent-id>
 agentctl asyncwait "$a" --notify opencode:<session-id>
 ```
 
-`asyncwait` registers a durable wait and returns immediately. The parent harness can continue working. When the child reaches a terminal state, `agentctl` sends a structured completion or failure message to the notification target.
+`asyncwait` registers a durable wait and returns immediately. The parent harness can continue working. When the child reaches a terminal state, `agentctl` sends a structured completion or failure message to the notification target. With `--timeout`, it sends a progress notification at the deadline even if the child is still running; the agent can inspect the status and register a new wait.
 
 ## Scope of the first implementation
 
@@ -24,7 +24,7 @@ agentctl asyncwait "$a" --notify opencode:<session-id>
 
 - A local `agentctl` daemon with a durable job/wait store.
 - Agent handles that identify a child session and its harness.
-- `asyncwait` registration and completion delivery.
+- `asyncwait` registration, timeout, and completion delivery.
 - Status, transcript/result reading, follow-up, and cancellation primitives.
 - Codex, OpenCode, and Cursor notification adapters.
 - Instructions for each harness explaining how the agent discovers its own current session ID before passing `--notify`.
@@ -47,7 +47,7 @@ parent agent
   v
 agentctl CLI  --->  local daemon  --->  child adapter
                          |
-                         | terminal event
+                         | terminal or timeout event
                          v
                     notify adapter
                          |
@@ -66,6 +66,7 @@ Each child job stores:
 - start and finish timestamps
 - result/transcript location
 - notification target
+- optional timeout deadline
 - delivery state and stable notification ID
 
 ## Notification adapters
@@ -124,6 +125,10 @@ status: succeeded | failed | cancelled
 result: <short result or pointer to the full result>
 ```
 
+When a timed wait fires before the child is terminal, the envelope includes
+`event: timeout`, the current status, and a command for registering another
+wait.
+
 The parent should be told where to read the full transcript/result rather than receiving an unbounded transcript automatically.
 
 ## CLI shape
@@ -132,7 +137,7 @@ Initial commands:
 
 ```text
 agentctl start <harness> <prompt> [options]
-agentctl asyncwait <job> --notify <harness>:<session-id>
+agentctl asyncwait <job> --notify <harness>:<session-id> [--timeout SECONDS]
 agentctl status <job>
 agentctl read <job>
 agentctl followup <job> <prompt>

@@ -73,10 +73,12 @@ class OpenCodeNotify(NotifyAdapter):
                 "POST", url, payload,
                 auth_header=config.opencode_auth_header())
         except httpc.HttpError as exc:
-            raise DeliveryError(
+            error = DeliveryError(
                 "opencode prompt admission failed: %s" % exc,
                 hint="the OpenCode server at %s must be running and must own "
                      "session %s" % (base, target_id))
+            error.acceptance_unknown = exc.status == 0 or exc.status >= 500
+            raise error
         if status not in (200, 202, 204):
             raise DeliveryError(
                 "opencode prompt admission returned HTTP %s: %s" % (status, body))

@@ -30,6 +30,10 @@ class TestPreflight(unittest.TestCase):
             # A port nothing is listening on.
             "AGENTCTL_OPENCODE_URL": "http://127.0.0.1:1",
         })
+        for _var in ("CODEX_THREAD_ID", "CLAUDE_SESSION_ID",
+                     "CURSOR_SESSION_ID", "OPENCODE_SESSION_ID",
+                     "AGENTCTL_FROM"):
+            self.env.pop(_var, None)
 
     def tearDown(self):
         self.run_cli("daemon", "stop")

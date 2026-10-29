@@ -1,81 +1,202 @@
 # agentctl
 
-A small CLI that lets an agent running in one harness start work in another,
-get told when it finishes, and read the result.
+Discover local agent sessions, start work, address existing sessions, and observe
+completion across Codex, Claude Code, Cursor, and OpenCode. Python 3; standard
+library only.
 
-Supports **Codex**, **Claude Code**, **Cursor**, and **OpenCode**. Python 3
-only, no other dependencies.
+## Install and upgrade
 
-## Install
-
-```bash
-./install.sh
+```sh
+./install.sh                   # CLI and shared harness skill, installed as symlinks
+./install.sh --cli
+./install.sh --skills
+agentctl daemon status
 ```
 
-This puts `agentctl` on your `PATH` and installs one shared skill into every
-harness it finds, so each agent already knows how to use it. Both are
-symlinks, so `git pull` updates them.
+The daemon keeps imported code in memory. After upgrading, finish active jobs,
+then run `agentctl daemon stop` and `agentctl daemon start`. New session operations
+reject an incompatible daemon before dispatching work. Stopping the daemon does
+not cancel its children; recovery reads their persisted records.
 
-```bash
-./install.sh --cli        # the command only
-./install.sh --skills     # the skill only
-./install.sh --opencode-plugin  # optional native OpenCode `agentctl` tool
-./install.sh --uninstall  # remove both; the job store is left alone
-agentctl daemon status    # confirm it works
+## Find and read sessions
+
+Discovery includes sessions created outside agentctl. It reads Codex active and
+archived JSONL, Claude project transcripts, Cursor CLI SQLite, Cursor IDE
+`User/globalStorage/state.vscdb` composers and bubbles (including archived chats
+and labelled subagents), legacy IDE transcripts, and OpenCode SQLite or the
+configured server. Cursor's conversation search index also exposes metadata for
+locally indexed cloud or uncached chats; those entries have `capability.read:
+false` when no local history is available. No hook setup is needed.
+
+```sh
+agentctl sessions list --json
+agentctl sessions list --harness claude --filter "migration"
+agentctl sessions history codex:<thread-id> --limit 30
+agentctl sessions history claude:<session-id> --limit 30 --offset 30
+agentctl sessions history cursor:<chat-id> --raw --json
 ```
 
-## Quick start
+Addresses are `harness:native-id`. A discovered session's `kind` distinguishes
+Claude roots/subagents and Cursor CLI/IDE/cloud records. Readability and sending
+are separate capabilities. Normal history preserves full message text; `--raw`
+includes native records and tool activity. Cursor CLI history follows the native
+root's ordered message references when recognised. Cursor IDE history follows
+`fullConversationHeadersOnly`, excludes orphaned bubbles, and preserves native
+tool bubbles in raw output. IDE chats remain unsupported for CLI send/resume.
+Legacy blob fallback records
+carry `ordering: unknown`; copied SQLite snapshots are labelled.
 
-Start a child, register a wait, and keep working. When the child finishes, the
-result is delivered into the parent's live session.
+### Search conversation contents
 
-```bash
-a=$(agentctl start claude "Write the migration and run the tests")
-agentctl asyncwait "$a" --notify codex:<your-thread-id>
+```sh
+agentctl sessions search 'coreplan-web/pull/5100'
+agentctl sessions search 'review CSV upload' --mode full-text
+agentctl sessions search '5100' --harness cursor --json
+agentctl sessions search '5100' --include-tools
+agentctl sessions search-status --json
+agentctl sessions reindex
+agentctl sessions reindex --include-tools
 ```
 
-`asyncwait` hands the wait to a local daemon and returns immediately. It does
-not depend on the parent's shell or the daemon staying alive.
+The daemon maintains a persistent SQLite FTS5 index at
+`$AGENTCTL_HOME/search.sqlite3` (normally `~/.agentctl/search.sqlite3`). The first
+search builds it; subsequent daemon starts resume maintenance. Every 60 seconds
+the daemon discovers sessions, compares native metadata and file/WAL fingerprints,
+and replaces only changed conversations. Replacing a conversation reconciles
+edits and changed branches as well as appended messages. Removed sessions are
+removed from the index; failed reads retain old history with an explicit error.
 
-If your harness can't receive a push (see [Harness notes](#harness-notes)),
-block instead:
+Literal search (the default) matches substrings, including punctuation in URLs
+and identifiers. Full-text search matches all supplied words using FTS5.
+Results group matches by native session and prefer matches in user prompts,
+then titles, then assistant text. Each result includes an excerpt, role, message
+position, and a command to read nearby history. Indexed cloud references can
+match titles even when their history is unavailable.
 
-```bash
-agentctl wait "$a"
+Every search reports freshness and per-harness coverage. An incomplete result
+can mean unreadable histories, missing native messages, or a source/read error;
+`search-status --json` includes the affected addresses and reasons. Search does
+not contact a provider to fetch missing cloud transcripts. Tool output is
+excluded by default. `--include-tools` adds supported native tool output to the
+index and includes it in that search; `reindex` without that flag returns to a
+conversation-text-only index. Search indexing does not alter native stores.
+
+## Start, send, and resume
+
+```sh
+job=$(agentctl start claude "Implement the migration and run the checks" --model sonnet --cwd /repo)
+handle=$(agentctl send codex:<thread-id> "Investigate the failing tests")
+job=$(agentctl resume claude:<session-id> "Continue the implementation" --cwd /repo)
+agentctl start codex "Review the change" --from codex:<caller-thread-id>
+agentctl send opencode:<session-id> "Run the tests" --no-notify
+agentctl start claude "Quick check" --require-callback
 ```
 
-The parent receives a short message pointing at the full result rather than
-the whole transcript:
+`start` creates a session. `send` uses a supported existing-client transport;
+`resume` runs a managed child against an existing stored session. Claude resume
+opens a headless client and does not inject into an existing interactive client.
+Addressing an unknown session fails rather than creating one.
 
-```text
-[agentctl completion]
-job: job_9f2c11a7e4d0
-child: claude:6b1f9c8e-...
-harness: claude
-status: succeeded
-result: Migration written; 24 tests pass.
-full: agentctl read job_9f2c11a7e4d0
+Requests have durable result handles even when caller identity is unavailable
+or `--no-notify` is supplied. Automatic one-shot subscriptions are created
+before managed children launch or messages are dispatched. `--require-callback`
+rejects before dispatch if a callback route cannot be verified. It cannot be
+combined with `--no-notify`.
+
+| Target | Dispatch |
+|---|---|
+| Codex | Native queue; correlate the request marker with its native turn |
+| Claude | External push unsupported; explicit managed `resume` is available |
+| Cursor CLI | Managed CLI resume, with busy checks and stored full result |
+| Cursor IDE/cloud | External sending unsupported |
+| OpenCode | Queued v2 prompt on the server owning that session; correlate message IDs |
+
+A busy target without a durable queue is rejected. Opting out of notifications
+does not bypass busy checks. Unsupported, missing configuration, and an
+unreachable route are reported separately. An ambiguous acceptance is recorded
+as unknown and never automatically resent.
+
+Codex preflight checks the app-server control route when available, or the
+Desktop queue IPC listener and locally stored target. The control socket is
+not required for queue delivery. These read-only checks submit no prompt;
+actual callback acceptance is recorded only when the queue command succeeds.
+
+## Results and listeners
+
+```sh
+agentctl status <job> --json
+agentctl read <job>
+agentctl wait <job>
+agentctl sub read <sub-id> --json
+agentctl sub create codex:<thread-id> --notify codex:<caller-thread-id> --timeout 120
+agentctl sub list codex:<thread-id> --json
+agentctl listeners
+agentctl listeners claude:<session-id> --json
 ```
 
-## Commands
+Explicit subscriptions observe a known current turn. An idle session has no
+current turn to subscribe to. Automatic subscriptions follow the turn caused by
+the request; an unrelated Stop must not consume a listener. Completion means the
+requested turn ended, rather than a judgment that its broader task is finished.
+Callbacks do not create return subscriptions.
 
-```text
-agentctl start <harness> <prompt> [--cwd DIR] [--model M]
-agentctl asyncwait <job> --notify <harness>:<session-id>
-agentctl wait <job>... [--rewake] [--timeout SECONDS] [--json]
-agentctl status <job>
-agentctl read <job> [--stream | --stderr]
-agentctl followup <job> <prompt>
+`listeners` includes pending subscriptions and classic `asyncwait` registrations.
+Results and callback states are separate: a stored result is readable even when
+callback delivery is unsupported, queued, failed, or unknown. Legacy queued inbox entries are not proof of delivery; hook-dependent receivers
+are no longer supported.
+
+## Transcript completion polling and callbacks
+
+The daemon checks explicitly subscribed external sessions every 60 seconds,
+independently of search indexing. Subscriptions bind a native active turn and
+persist across daemon restarts. Completion requires a native terminal marker;
+inactivity, a quiet transcript, or a tool-call boundary is not completion.
+Managed jobs still notify immediately on process exit. Correlated Codex sends
+and OpenCode server requests retain their existing request observers.
+
+Supported saved markers are Codex task completion/abort events, Claude assistant
+terminal stop reasons, Cursor IDE composer completed/aborted state for its current
+user turn, and OpenCode local assistant completion linked to a parent user message.
+Cursor IDE only persists the current composer's terminal state: if a newer turn
+replaces it before a scan, the older outcome remains unknown rather than guessed.
+Cursor CLI and cloud-reference formats without a verified marker cannot support
+external transcript subscriptions. Their managed agentctl jobs remain watchable.
+
+Discovery exposes `capability.completion_watch` and its mechanism. An idle or
+unknown turn cannot be subscribed. Poll errors appear as `observation_error` on
+the subscription; timeout expiry remains distinct from completion.
+
+| Listener | Callback delivery without hooks |
+|---|---|
+| Codex | Native queue into the existing chat |
+| Cursor CLI | Existing CLI session resume, subject to busy checks |
+| OpenCode | Reachable server owning the session |
+| Claude / Cursor IDE | Unsupported external reception; read stored results or use `agentctl wait` |
+
+No client hooks are installed or consumed. Legacy hook inspection and selective
+cleanup remain available:
+
+```sh
+agentctl setup --inspect
+agentctl setup --uninstall
+```
+
+Hook installation and the `_hook` command are retired. Cleanup preserves
+unrelated user hooks and settings.
+
+## Classic job operations
+
+```sh
+agentctl asyncwait <job> --notify codex:<thread-id> --timeout 300
+agentctl followup <job> "Continue"
 agentctl cancel <job>
 agentctl list
-agentctl daemon status|start|stop|run
+agentctl read <job> --stream
 ```
 
-`start` prints only the job handle, so `a=$(agentctl start ...)` captures it
-exactly. Add `--json` to most commands for the full record.
-
-Three identifiers exist and are never interchangeable: the agentctl job handle
-(`job_...`), the wait handle (`wait_...`), and the harness's own session id.
+A Codex queued notification arrives when the current turn ends. Register the
+callback and end the turn to receive it. From a client without a usable callback
+route, use `wait` or read the persisted result.
 
 ## Optional OpenCode tool
 
@@ -101,115 +222,42 @@ as an explicit override. The completion callback is best-effort if the server
 itself is restarted; the job remains durable and is still available through
 `status` and `read`.
 
-## Harness notes
+## Caller identity
 
-| Harness | Child runs as | Completion delivered by |
-|---|---|---|
-| codex | `codex exec --json` | `codex queue --thread` (queued until the thread is idle) |
-| claude | `claude -p --output-format stream-json` | Claude's own wake: `agentctl wait`, or `wait --rewake` from an `asyncRewake` hook |
-| cursor | `cursor-agent -p` on a new chat | `cursor-agent -p --resume` — terminal (`cursor-agent`) chats only |
-| opencode | `opencode run --server` on a new session | `POST /api/session/<id>/prompt` on a running server, or the optional plugin's authenticated SDK callback |
+Resolution order: explicit `--from`, `AGENTCTL_FROM`, native Claude/Cursor/OpenCode
+session variables, then `CODEX_THREAD_ID`. Identity is never guessed from the
+newest transcript. Children have inherited caller identities removed before
+their own session identity is injected.
 
-Things to know per harness:
-
-- **Cursor IDE chats can't be notified.** A message delivered to an IDE chat
-  from the command line is not shown in the IDE, so `asyncwait` refuses IDE
-  chat ids. From an IDE session, use `agentctl wait`. Push delivery works from
-  `cursor-agent` in a terminal.
-- **OpenCode needs a reachable v2 API server.** Run `opencode serve`, set
-  `AGENTCTL_OPENCODE_URL`, and provide
-  `AGENTCTL_OPENCODE_USERNAME` / `AGENTCTL_OPENCODE_PASSWORD` when the server
-  uses Basic auth. The OpenCode plugin inherits the server's authenticated SDK
-  client; use `agentctl wait` if the server is unavailable.
-- **Codex** is often not on `PATH`. On macOS agentctl falls back to the copy
-  bundled in `ChatGPT.app`, which may differ in version from a Homebrew or npm
-  install. `PATH` always wins when present.
-
-`asyncwait` checks that the target can actually receive a delivery *before*
-storing the wait, so an unreachable target fails immediately rather than
-silently at delivery time.
-
-## One skill for all harnesses
-
-`skills/agentctl/SKILL.md` is a single skill with a section per harness;
-`install.sh` symlinks it into each harness's skills directory:
-
-| Harness | Skills directory |
-|---|---|
-| Codex | `~/.codex/skills` |
-| Claude Code | `~/.claude/skills` |
-| Cursor | `~/.cursor/skills` |
-| OpenCode | `~/.config/opencode/skills` (also reads `~/.claude/skills`) |
-
-It is one skill rather than four because some harnesses read each other's
-directories. OpenCode may report `duplicate skill name`; that is harmless, as
-both paths lead to the same file.
-
-## Design choices
-
-- **Children run fully permissive.** Every child is started with its
-  harness's skip-approvals flag, because an unwatched child that stops to ask
-  a question would hang forever. Children can run any command in the working
-  directory you give them — be deliberate about `--cwd`.
-- **Exactly-once delivery, no silent retries.** Each wait carries a
-  notification id derived from the wait, job, and terminal status, so a
-  repeated event or daemon restart can't produce a second message. A failed
-  delivery stays failed; the result is still readable with `agentctl read`.
-- **One path per harness, no fallbacks.** If the chosen interface is
-  unavailable the command fails and says so.
-- **No universal transcript format.** `agentctl read --stream` returns the
-  child's raw events in that harness's own shape.
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | success |
-| 2 | reserved for Claude's `asyncRewake` contract (`wait --rewake`) |
-| 64 | usage error |
-| 65 | unknown job handle |
-| 66 | invalid notification target |
-| 67 | unsupported operation |
-| 68 | delivery failed |
-| 69 | daemon unavailable |
-| 70 | child failed |
-| 71 | child cancelled |
-| 75 | harness binary or prerequisite missing |
-
-## Configuration
+## Configuration and failures
 
 | Variable | Purpose |
 |---|---|
-| `AGENTCTL_HOME` | store, socket, and log location (default `~/.agentctl`) |
-| `AGENTCTL_<HARNESS>_BIN` | override a harness binary, e.g. `AGENTCTL_CODEX_BIN` |
-| `AGENTCTL_OPENCODE_URL` | the OpenCode server (default `http://127.0.0.1:4096`) |
-| `AGENTCTL_OPENCODE_USERNAME` | Basic-auth username (default `opencode`) |
-| `AGENTCTL_OPENCODE_PASSWORD` | Basic-auth password for the user-owned server |
-| `AGENTCTL_BIN` | absolute path to the agentctl executable used by the OpenCode plugin |
+| `AGENTCTL_HOME` | Store and daemon socket; default `~/.agentctl` |
+| `AGENTCTL_<HARNESS>_BIN` | Override a native executable |
+| `AGENTCTL_OPENCODE_URL` | Server owning the target; default `http://127.0.0.1:4096` |
+| `AGENTCTL_OPENCODE_USERNAME` | Basic-auth username; default `opencode` |
+| `AGENTCTL_OPENCODE_PASSWORD` | Basic-auth password for the owning server |
+| `AGENTCTL_BIN` | CLI override for the optional OpenCode plugin |
+| `AGENTCTL_OPENCODE_DATA_DIR` | Local OpenCode database directory |
+| `AGENTCTL_CODEX_CONTROL_SOCKET` | Existing app-server socket for read-only preflight |
+| `AGENTCTL_FROM` | Explicit `harness:native-id` caller identity |
+| `AGENTCTL_RECEIVE_TIMEOUT` | Claude inbox waiter lifetime; bounded to 550 seconds |
 
-The daemon inherits the environment of whichever command first started it.
-After changing a variable, run `agentctl daemon stop && agentctl daemon start`.
-For OpenCode children, agentctl maps its configured credentials to
-`OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` for `opencode run
---server`. The OpenCode child and notification adapters use the v2 `/api`
-routes, verified with OpenCode 2.0.32.
+Exit codes: `0` success; `2` legacy foreground rewake; `64` invalid usage/configuration;
+`65` unknown handle/session; `66` invalid or unreachable target; `67` unsupported;
+`68` delivery failed; `69` daemon unavailable/incompatible; `70` child failed;
+`71` cancelled; `75` missing prerequisite. JSON records describe request and
+callback states separately. A delivery in flight during a crash is recovered as
+unknown instead of resent.
 
-On-disk layout:
+## Design and validation
 
-```text
-~/.agentctl/
-  daemon.sock, daemon.pid, daemon.log
-  jobs/<job-id>/job.json      the job record
-  jobs/<job-id>/stream.jsonl  the child's raw events
-  jobs/<job-id>/stderr.log    the child's stderr
-  jobs/<job-id>/result.txt    the child's final message
-```
+The session communication design is specified in [PRD.md](PRD.md).
 
-## Tests
-
-```bash
+```sh
 python3 -m unittest discover -s tests
 ```
 
-The suite drives the real CLI, socket, and job store. Harness binaries are
-replaced via the `AGENTCTL_*_BIN` overrides, so no agent credits are spent.
+Tests use native-format fixtures, stand-in binaries, and local HTTP servers;
+they do not invoke paid model prompts.

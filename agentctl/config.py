@@ -16,6 +16,7 @@ HARNESSES = ("codex", "claude", "cursor", "opencode")
 # on macOS and is frequently absent from a non-login shell's PATH.
 EXTRA_BINARY_PATHS = {
     "codex": (
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         "/Applications/ChatGPT.app/Contents/Resources/codex",
         os.path.expanduser("~/.codex/bin/codex"),
     ),
@@ -46,6 +47,18 @@ ENV_OVERRIDES = {
 }
 
 DEFAULT_OPENCODE_URL = "http://127.0.0.1:4096"
+
+# Environment variable agentctl hooks set to export the caller's session
+# identity in a unified format: HARNESS:SESSION_ID
+CALLER_ENV_VAR = "AGENTCTL_FROM"
+
+# Native harness env vars that carry session identity without setup
+NATIVE_SESSION_ENV_VARS = {
+    "CODEX_THREAD_ID": "codex",
+    "CLAUDE_SESSION_ID": "claude",
+    "CURSOR_SESSION_ID": "cursor",
+    "OPENCODE_SESSION_ID": "opencode",
+}
 
 
 def home():

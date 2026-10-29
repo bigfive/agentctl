@@ -23,6 +23,9 @@ from .errors import AgentctlError, DaemonUnavailableError
 CONNECT_TIMEOUT = 5
 CALL_TIMEOUT = 300
 START_TIMEOUT = 20
+PROTOCOL_VERSION = 3
+PROTOCOL_OPS = {"start", "send_session", "resume_external", "sub_create",
+                "sub_read", "sub_list", "listeners", "hook_event", "inbox_list", "inbox_claim"}
 
 
 # ---- server ------------------------------------------------------------
@@ -46,6 +49,14 @@ def serve(daemon):
         handle.write("%d\n" % os.getpid())
 
     daemon.recover()
+    daemon.start_transcript_polling()
+    # Indexing starts on first search, then resumes automatically on later boots.
+    if os.path.isfile(os.path.join(config.home(), "search.sqlite3")):
+        try:
+            daemon.start_search_index()
+        except Exception as exc:
+            from .daemon import log
+            log("search index startup failed: %s" % exc)
 
     try:
         while True:
@@ -93,12 +104,29 @@ def _handle(daemon, conn):
 def dispatch(daemon, request):
     op = request.get("op")
     try:
+        if op in ("hook_event", "hook_complete"):
+            from .errors import UnsupportedOperationError
+            raise UnsupportedOperationError("native lifecycle hooks have been replaced by transcript completion polling")
+        if op == "session_search":
+            return {"ok": True, "data": daemon.search_sessions(
+                query=request["query"], mode=request.get("mode", "literal"),
+                harness=request.get("harness"), limit=request.get("limit", 20),
+                include_tools=request.get("include_tools", False))}
+        if op == "search_status":
+            return {"ok": True, "data": daemon.search_status()}
+        if op == "session_reindex":
+            return {"ok": True, "data": daemon.reindex_sessions(
+                include_tools=request.get("include_tools", False))}
         if op == "ping":
-            return {"ok": True, "data": {"pid": os.getpid()}}
+            return {"ok": True, "data": {"pid": os.getpid(), "protocol": PROTOCOL_VERSION}}
         if op == "start":
             record = daemon.start_job(
                 request["harness"], request.get("prompt") or "",
-                request.get("cwd"), request.get("model"))
+                request.get("cwd"), request.get("model"),
+                subscriber_harness=request.get("subscriber_harness"),
+                subscriber_id=request.get("subscriber_id"),
+                require_callback=request.get("require_callback", False),
+            )
             return {"ok": True, "data": record}
         if op == "followup":
             record = store.read(request["job"])
@@ -114,7 +142,8 @@ def dispatch(daemon, request):
                 followup_of=record["job"], session_id=native)
             return {"ok": True, "data": child}
         if op == "asyncwait":
-            wait = daemon.register_wait(request["job"], request["notify"])
+            wait = daemon.register_wait(request["job"], request["notify"],
+                                        request.get("timeout"))
             return {"ok": True, "data": wait}
         if op == "status":
             return {"ok": True, "data": store.read(request["job"])}
@@ -122,6 +151,114 @@ def dispatch(daemon, request):
             return {"ok": True, "data": store.list_jobs()}
         if op == "cancel":
             return {"ok": True, "data": daemon.cancel_job(request["job"])}
+        if op == "sub_create":
+            record = daemon.register_session_sub(
+                target_harness=request["target_harness"],
+                target_id=request["target_id"],
+                from_harness=request.get("from_harness"),
+                from_id=request.get("from_id"),
+                job=request.get("job"),
+                timeout=request.get("timeout"),
+                is_callback=request.get("is_callback", False),
+                request_id=request.get("request_id"),
+                target_turn_id=request.get("target_turn_id"),
+                observe_current=request.get("observe_current", True),
+            )
+            return {"ok": True, "data": record}
+        if op == "sub_read":
+            from . import sessions as _sessions
+            record = _sessions.read(request["sub"])
+            return {"ok": True, "data": record}
+        if op == "sub_list":
+            from . import sessions as _sessions
+            target = request.get("target")
+            if target:
+                records = _sessions.list_for_target(target)
+            else:
+                records = _sessions.list_all()
+            return {"ok": True, "data": records}
+        if op == "listeners":
+            from . import sessions as _sessions
+            target = request["target"]
+            records = [r for r in _sessions.list_for_target(target)
+                       if r.get("status") == _sessions.PENDING]
+            for job in store.list_jobs():
+                native = job.get("native_session_id")
+                if not native or "%s:%s" % (job["harness"], native) != target:
+                    continue
+                for wait in job.get("waits", []):
+                    if wait.get("delivery", {}).get("state") != store.DELIVERY_PENDING:
+                        continue
+                    records.append({"sub": wait["wait"], "legacy_wait": True,
+                                    "target_address": target, "job": job["job"],
+                                    "target_turn_id": job.get("native_turn_id"),
+                                    "from_address": "%s:%s" % (wait["notify_harness"], wait["notify_id"]),
+                                    "status": "pending", "callback": wait.get("delivery", {})})
+            return {"ok": True, "data": records}
+
+        if op == "hook_complete":
+            count = daemon.notify_hook_complete(
+                request["target"],
+                turn_id=request.get("turn_id"),
+            )
+            return {"ok": True, "data": {"triggered": count,
+                                         "target": request["target"]}}
+        if op == "send_session":
+            record = daemon.send_session(
+                request["harness"], request["session_id"], request.get("prompt") or "",
+                model=request.get("model"),
+                subscriber_harness=request.get("subscriber_harness"),
+                subscriber_id=request.get("subscriber_id"),
+                require_callback=request.get("require_callback", False))
+            return {"ok": True, "data": record}
+
+        if op == "resume_external":
+            record = daemon.resume_external(
+                request["harness"],
+                request["session_id"],
+                request.get("prompt") or "",
+                request.get("cwd"),
+                request.get("model"),
+                subscriber_harness=request.get("subscriber_harness"),
+                subscriber_id=request.get("subscriber_id"),
+                require_callback=request.get("require_callback", False),
+            )
+            return {"ok": True, "data": record}
+
+        if op == "hook_event":
+            # General hook event: start, begin, complete
+            count = daemon.notify_hook_event(
+                request["target"],
+                event=request.get("event", "complete"),
+                turn_id=request.get("turn_id"),
+                transcript_path=request.get("transcript_path"),
+                result=request.get("result"), request_id=request.get("request_id"),
+                prompt=request.get("prompt"),
+                stop_hook_active=request.get("stop_hook_active", False),
+                status=request.get("status"),
+            )
+            return {"ok": True, "data": {"triggered": count,
+                                         "target": request["target"],
+                                         "event": request.get("event", "complete")}}
+
+        if op == "inbox_list":
+            from . import sessions as _sessions
+            # Accept either session_id or address (harness:native-id)
+            inbox_id = request.get("session_id") or request.get("address", "")
+            messages = _sessions.inbox_list(inbox_id)
+            return {"ok": True, "data": messages}
+
+        if op == "inbox_claim":
+            from . import sessions as _sessions
+            # Accept either session_id or address (harness:native-id)
+            inbox_id = request.get("session_id") or request.get("address", "")
+            _sessions.registry_update(inbox_id, receiver_until=time.time() + 2)
+            messages = _sessions.inbox_claim_all(inbox_id)
+            # setup.py expects {message: str|null} format for single message
+            # but we return a list; provide both formats
+            message = "\n\n".join(r["message"] for r in messages) if messages else None
+            return {"ok": True, "data": {"message": message, "messages": messages}}
+
         if op == "shutdown":
             threading.Timer(0.1, os._exit, args=(0,)).start()
             return {"ok": True, "data": {"stopping": True}}
@@ -224,8 +361,22 @@ def ensure_daemon():
 def call(op, **fields):
     """Send one request, raising the daemon's error as a local error."""
     ensure_daemon()
+    if op in PROTOCOL_OPS:
+        version = _request({"op": "ping"}).get("data", {}).get("protocol", 1)
+        if version != PROTOCOL_VERSION:
+            raise DaemonUnavailableError(
+                "running daemon protocol %s differs from CLI protocol %s; request was not dispatched"
+                % (version, PROTOCOL_VERSION),
+                hint="after active jobs finish, run 'agentctl daemon stop' and 'agentctl daemon start'")
     request = dict(fields)
     request["op"] = op
+    response = _request(request)
+    if response.get("ok"):
+        return response.get("data")
+    _raise(response)
+
+
+def _request(request):
     try:
         client = _connect(config.socket_path())
     except OSError as exc:
@@ -238,15 +389,11 @@ def call(op, **fields):
         line = _read_line(client)
     finally:
         client.close()
-
     if not line:
         raise DaemonUnavailableError(
             "the agentctl daemon closed the connection without answering %r"
-            % op)
-    response = json.loads(line)
-    if response.get("ok"):
-        return response.get("data")
-    _raise(response)
+            % request.get("op"))
+    return json.loads(line)
 
 
 def _raise(response):
