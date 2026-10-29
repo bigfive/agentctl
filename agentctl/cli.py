@@ -32,7 +32,7 @@ import sys
 import time
 
 from . import __version__, config, envelope, ipc, notify, store
-from .errors import AgentctlError, ExitCode, UsageError
+from .errors import AgentctlError, DeliveryError, ExitCode, UsageError
 
 POLL_SECONDS = 0.5
 
@@ -83,7 +83,9 @@ def _build_parser():
     start.add_argument("--require-callback", action="store_true",
                        help="fail before dispatch if caller cannot receive a "
                             "callback")
+    start.add_argument("--options-json", help="explicit harness options as a JSON object")
     start.add_argument("--json", action="store_true")
+    start.add_argument("--request-id", help="durable launch idempotency key")
     start.set_defaults(handler=cmd_start)
 
     send = sub.add_parser(
@@ -216,6 +218,10 @@ def _build_parser():
     hook_cmd.add_argument("--session", default=None)
     hook_cmd.add_argument("--harness", default=None)
     hook_cmd.set_defaults(handler=cmd_hook)
+    validation = sub.add_parser('validate-options', help='validate harness options without launching a worker')
+    validation.add_argument('harness', choices=sorted(config.HARNESSES))
+    validation.add_argument('--options-json', required=True)
+    validation.set_defaults(handler=cmd_validate_options)
 
     asyncwait = sub.add_parser(
         "asyncwait",
@@ -258,8 +264,26 @@ def _build_parser():
         "followup", help="send another turn into a job's native session")
     followup.add_argument("job")
     followup.add_argument("prompt")
+    followup.add_argument("--options-json", help="override options; absent inherits previous job")
+    followup.add_argument("--request-id", help="durable launch idempotency key")
     followup.add_argument("--json", action="store_true")
     followup.set_defaults(handler=cmd_followup)
+
+    interrupt = sub.add_parser('interrupt', help='stop a running worker and resume its session with a correction')
+    interrupt.add_argument('job')
+    interrupt.add_argument('prompt')
+    interrupt.add_argument('--request-id')
+    interrupt.add_argument('--json', action='store_true')
+    interrupt.set_defaults(handler=cmd_interrupt)
+
+    send = sub.add_parser("notify", help="send a message to an existing native session")
+    send.add_argument("target", metavar="HARNESS:SESSION-ID")
+    message = send.add_mutually_exclusive_group(required=True)
+    message.add_argument("--message")
+    message.add_argument("--message-file")
+    send.add_argument("--id", dest="request_id", help="durable delivery idempotency key")
+    send.add_argument("--json", action="store_true")
+    send.set_defaults(handler=cmd_notify)
 
     cancel = sub.add_parser("cancel", help="cancel a running job")
     cancel.add_argument("job")
@@ -280,6 +304,31 @@ def _build_parser():
 
 
 # ---- commands ----------------------------------------------------------
+
+def parse_worker_options(harness, text):
+    from . import children
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        raise UsageError('invalid worker options JSON: ' + str(exc))
+    children.get(harness).option_args(value)
+    return value
+
+
+def cmd_validate_options(args):
+    value = parse_worker_options(args.harness, args.options_json)
+    print(json.dumps({'valid': True, 'options': value}))
+    return ExitCode.OK
+
+
+def options_payload(args, harness):
+    if args.options_json is None:
+        return {}
+    value = parse_worker_options(harness, args.options_json)
+    if not ipc.call('ping').get('worker_options', False):
+        raise UsageError('running agentctl daemon does not support worker options; restart it before using options')
+    return {'options': value}
+
 
 def cmd_start(args):
     from .sender import resolve_caller, preflight_callback
@@ -315,6 +364,8 @@ def cmd_start(args):
         subscriber_harness=from_harness if from_harness else None,
         subscriber_id=from_id if from_id else None,
         require_callback=args.require_callback,
+        request_id=args.request_id,
+        **options_payload(args, args.harness),
     )
 
     sub_record = record.pop("_subscription", None)
@@ -757,11 +808,43 @@ def cmd_read(args):
 
 
 def cmd_followup(args):
-    child = ipc.call("followup", job=args.job, prompt=args.prompt)
+    parent = ipc.call('status', job=args.job) if args.options_json is not None else None
+    option_fields = options_payload(args, parent['harness']) if parent is not None else {}
+    child = ipc.call("followup", job=args.job, prompt=args.prompt,
+                     request_id=args.request_id, **option_fields)
     if args.json:
         print(json.dumps(child, indent=2, sort_keys=True))
     else:
         print(child["job"])
+    return ExitCode.OK
+
+
+def cmd_interrupt(args):
+    record = ipc.call('interrupt', job=args.job, prompt=args.prompt, request_id=args.request_id)
+    if record['status'] in (store.FAILED, store.CANCELLED):
+        raise UsageError('replacement worker failed: ' + str(record.get('error')))
+    print(json.dumps(record, indent=2, sort_keys=True) if args.json else record['job'])
+    return ExitCode.OK
+
+
+def cmd_notify(args):
+    if args.message_file is not None:
+        with open(args.message_file, encoding="utf-8") as handle:
+            message = handle.read()
+    else:
+        message = args.message
+    if not message.strip():
+        raise UsageError("notification message must not be empty")
+    record = ipc.call("notify", target=args.target, message=message,
+                      request_id=args.request_id)
+    if record['status'] != store.SUCCEEDED:
+        raise DeliveryError('previous notification attempt is failed or ambiguous; not retried: ' +
+                            (record.get('error') or 'delivery state is unknown'))
+    if args.json:
+        print(json.dumps(record, indent=2, sort_keys=True))
+    else:
+        print("notification: %s" % record["job"])
+        print("status: accepted")
     return ExitCode.OK
 
 

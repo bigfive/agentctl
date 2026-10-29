@@ -295,6 +295,7 @@ class TestListenersViaIPC(unittest.TestCase):
         self.env = dict(os.environ)
         self.env.update({
             "AGENTCTL_HOME": self.home,
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "missing-desktop.sock"),
             "HOME": os.path.join(self.home, "native"),
             "AGENTCTL_CLAUDE_BIN": os.path.join(FAKES, "fake-claude"),
             "AGENTCTL_CODEX_BIN": os.path.join(FAKES, "fake-codex"),
@@ -425,6 +426,7 @@ class TestJobSubscriptionDelivery(unittest.TestCase):
         self.env = dict(os.environ)
         self.env.update({
             "AGENTCTL_HOME": self.home,
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "missing-desktop.sock"),
             "AGENTCTL_CLAUDE_BIN": os.path.join(FAKES, "fake-claude"),
             "AGENTCTL_CODEX_BIN": os.path.join(FAKES, "fake-codex"),
             "FAKE_CODEX_QUEUE_LOG": os.path.join(self.home, "queue.log"),

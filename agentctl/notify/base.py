@@ -2,8 +2,9 @@
 
 A notification adapter delivers one envelope into one live parent
 session. It validates the target id before attempting delivery, and it raises
-``DeliveryError`` on anything short of confirmed acceptance. It never retries:
-a retry could duplicate a follow-up in the parent's context.
+``DeliveryError`` on anything short of confirmed acceptance. Adapters normally avoid retries because they can duplicate
+a follow-up. Experimental Codex steering explicitly falls back to queue on
+errors; its adapter documents the duplicate risk and retains a warning.
 """
 
 

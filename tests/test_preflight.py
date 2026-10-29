@@ -25,6 +25,7 @@ class TestPreflight(unittest.TestCase):
         self.env = dict(os.environ)
         self.env.update({
             "AGENTCTL_HOME": self.home,
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "missing-desktop.sock"),
             "AGENTCTL_CLAUDE_BIN": os.path.join(FAKES, "fake-claude"),
             "AGENTCTL_CODEX_BIN": os.path.join(FAKES, "fake-codex"),
             # A port nothing is listening on.

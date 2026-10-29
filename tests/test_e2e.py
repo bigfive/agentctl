@@ -27,9 +27,12 @@ class Harness(unittest.TestCase):
         self.env = dict(os.environ)
         self.env.update({
             "AGENTCTL_HOME": self.home,
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "missing-desktop.sock"),
             "AGENTCTL_CLAUDE_BIN": os.path.join(FAKES, "fake-claude"),
             "AGENTCTL_CODEX_BIN": os.path.join(FAKES, "fake-codex"),
             "FAKE_CODEX_QUEUE_LOG": self.queue_log,
+            # Harness tests must never contact the operator's Desktop.
+            "AGENTCTL_CODEX_IPC_SOCKET": os.path.join(self.home, "absent-desktop.sock"),
         })
         self.env.pop("FAKE_DELAY", None)
         self.env.pop("FAKE_CODEX_QUEUE_FAIL", None)
@@ -94,6 +97,95 @@ class Harness(unittest.TestCase):
 
 
 class TestLifecycle(Harness):
+    def test_team_worker_does_not_create_parent_completion_subscription(self):
+        from unittest.mock import patch
+        from agentctl_team.ports import Agentctl
+        self.env['CODEX_THREAD_ID'] = '01a07a1e-c33d-70b3-b0a0-d49304f192b3'
+        with patch.dict(os.environ, self.env):
+            record = Agentctl(CLI).launch('claude', 'team task', self.workdir,
+                                          'opus', 'team-launch-test')
+        self.wait_terminal(record['job'])
+        _, output, _ = self.run_cli('sub', 'list', '--json')
+        self.assertEqual(json.loads(output), [])
+        self.assertEqual(self.queued(), [])
+
+    def test_interrupt_stops_worker_resumes_session_and_deduplicates(self):
+        import signal
+        _, out, _ = self.run_cli('start', 'codex', 'SLOW original', '--options-json',
+                                 '{"reasoning_effort":"low"}', '--json')
+        first = json.loads(out)
+        deadline = time.time() + 5
+        while not self.status(first['job']).get('native_session_id'):
+            self.assertLess(time.time(), deadline)
+            time.sleep(.05)
+        original = self.status(first['job'])
+        _, out, _ = self.run_cli('interrupt', first['job'], 'Use the existing parser',
+                                 '--request-id', 'correction-1', '--json')
+        replacement = json.loads(out)
+        self.assertEqual('cancelled', self.status(first['job'])['status'])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(original['pid'], 0)
+        self.assertEqual(original['native_session_id'], replacement['native_session_id'])
+        self.assertEqual(original['options'], replacement['options'])
+        self.assertEqual(first['job'], replacement['followup_of'])
+        self.wait_terminal(replacement['job'])
+        _, result, _ = self.run_cli('read', replacement['job'])
+        self.assertIn('Use the existing parser', result)
+        _, repeated, _ = self.run_cli('interrupt', first['job'], 'Use the existing parser',
+                                      '--request-id', 'correction-1', '--json')
+        self.assertEqual(replacement['job'], json.loads(repeated)['job'])
+        self.assertEqual([], self.queued())
+        code, _, _ = self.run_cli('interrupt', first['job'], 'different', check=False)
+        self.assertNotEqual(0, code)
+
+    def test_interrupt_claude_resumes_the_same_session(self):
+        first = self.start('claude', 'HANG until corrected')
+        original = self.status(first)
+        _, out, _ = self.run_cli('interrupt', first, 'Continue with the corrected task', '--json')
+        replacement = json.loads(out)
+        self.assertEqual(original['native_session_id'], replacement['native_session_id'])
+        self.assertEqual('cancelled', self.status(first)['status'])
+        self.assertEqual('succeeded', self.wait_terminal(replacement['job'])['status'])
+        _, result, _ = self.run_cli('read', replacement['job'])
+        self.assertIn('Continue with the corrected task', result)
+
+    def test_interrupt_rejects_session_delivery(self):
+        _, out, _ = self.run_cli('notify', 'codex:manager', '--message', 'hello', '--json')
+        delivery = json.loads(out)
+        code, _, _ = self.run_cli('interrupt', delivery['job'], 'correction', check=False)
+        self.assertNotEqual(0, code)
+
+    def test_codex_options_are_recorded_passed_and_inherited_by_followup(self):
+        options = {'reasoning_effort': 'low', 'service_tier': 'priority'}
+        _, out, _ = self.run_cli('start', 'codex', 'option test', '--options-json',
+                                 json.dumps(options), '--json')
+        first = json.loads(out)
+        self.wait_terminal(first['job'])
+        self.assertEqual(options, first['options'])
+        self.assertIn('model_reasoning_effort="low"', first['command'])
+        self.assertIn('service_tier="priority"', first['command'])
+        _, out, _ = self.run_cli('followup', first['job'], 'Continue', '--json')
+        second = json.loads(out)
+        self.wait_terminal(second['job'])
+        self.assertEqual(options, second['options'])
+        _, out, _ = self.run_cli('followup', second['job'], 'Clear options',
+                                 '--options-json', '{}', '--json')
+        cleared = json.loads(out)
+        self.wait_terminal(cleared['job'])
+        self.assertEqual({}, cleared['options'])
+        self.assertNotIn('model_reasoning_effort="low"', cleared['command'])
+
+    def test_invalid_or_unsupported_worker_options_fail_before_launch(self):
+        for harness, options in [('codex', {'reasoning_effort': 'invalid'}),
+                                 ('codex', {'unknown': 'low'}),
+                                 ('claude', {'reasoning_effort': 'low'}),
+                                 ('codex', [])]:
+            code, _, _ = self.run_cli('start', harness, 'Must not start',
+                                      '--options-json', json.dumps(options), check=False)
+            self.assertEqual(64, code)
+        _, out, _ = self.run_cli('list', '--json')
+        self.assertEqual([], json.loads(out))
+
     def test_start_runs_to_success_and_records_result(self):
         job = self.start("claude", "do the thing")
         record = self.wait_terminal(job)
@@ -154,6 +246,53 @@ class TestLifecycle(Harness):
         self.assertEqual(record["native_session_id"],
                          first["native_session_id"])
         self.assertEqual(record["followup_of"], job)
+
+
+class TestNotify(Harness):
+    def test_arbitrary_message_and_id_survive_restart_without_duplicate(self):
+        target = "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3"
+        args = ("notify", target, "--message", "question\nsecond line", "--id", "alert-one", "--json")
+        _, out, _ = self.run_cli(*args)
+        first = json.loads(out)
+        self.assertEqual(first["kind"], "session_delivery")
+        self.assertEqual(first["status"], "succeeded")
+        self.assertEqual(first["transport_delivery"]["transport"], "codex queue")
+        self.assertIn("steer_warning", first["transport_delivery"])
+        self.run_cli("daemon", "stop")
+        time.sleep(0.3)
+        _, out, _ = self.run_cli(*args)
+        self.assertEqual(json.loads(out)["job"], first["job"])
+        self.assertEqual(len(self.queued()), 1)
+        self.assertEqual(self.queued()[0]["message"], "question\nsecond line")
+        code, _, _ = self.run_cli("notify", target, "--message", "different", "--id", "alert-one", check=False)
+        self.assertNotEqual(code, 0)
+
+    def test_message_file_empty_invalid_and_delivery_failure(self):
+        target = "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3"
+        file = os.path.join(self.home, "message.txt")
+        with open(file, "w") as handle:
+            handle.write("from file")
+        self.run_cli("notify", target, "--message-file", file)
+        self.assertEqual(self.queued()[0]["message"], "from file")
+        for args in (("notify", target, "--message", ""), ("notify", "invalid", "--message", "x")):
+            self.assertNotEqual(self.run_cli(*args, check=False)[0], 0)
+
+    def test_failed_delivery_is_not_retried_by_id(self):
+        self.env["FAKE_CODEX_QUEUE_FAIL"] = "1"
+        args = ("notify", "codex:01a07a1e-c33d-70b3-b0a0-d49304f192b3", "--message", "x", "--id", "failed-alert")
+        self.assertEqual(self.run_cli(*args, check=False)[0], 68)
+        code, _, err = self.run_cli(*args, check=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("ambiguous", err)
+
+    def test_start_request_id_does_not_launch_twice(self):
+        args = ("start", "claude", "one launch", "--cwd", self.workdir, "--request-id", "launch-one", "--json")
+        _, out, _ = self.run_cli(*args)
+        first = json.loads(out)
+        _, out, _ = self.run_cli(*args)
+        self.assertEqual(first["job"], json.loads(out)["job"])
+        _, out, _ = self.run_cli("list", "--json")
+        self.assertEqual(len(json.loads(out)), 1)
 
 
 class TestAsyncWait(Harness):

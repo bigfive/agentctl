@@ -50,6 +50,7 @@ class Daemon(object):
         self.lock = threading.Lock()
         self.watched = set()
         self.delivering = set()
+        self.operation_lock = threading.Lock()
         self.stopping = threading.Event()
         self.session_locks = {}
         self.observers = []
@@ -125,14 +126,135 @@ class Daemon(object):
     # ---- job lifecycle -------------------------------------------------
 
     def start_job(self, harness, prompt, cwd, model=None, followup_of=None,
-                  session_id=None, subscriber_harness=None,
-                  subscriber_id=None, require_callback=False):
-        """Create, launch, and begin watching one child run.
+                  session_id=None, request_id=None, options=None,
+                  subscriber_harness=None, subscriber_id=None, require_callback=False):
+        payload = dict(harness=harness, prompt=prompt, cwd=cwd, model=model,
+                       followup_of=followup_of, session_id=session_id,
+                       subscriber_harness=subscriber_harness, subscriber_id=subscriber_id,
+                       require_callback=require_callback)
+        if options is not None:
+            payload['options'] = options
+        with self.operation_lock:
+            return self._operation(request_id, payload,
+                                   lambda: self._start_job(**payload))
 
-        If subscriber_harness and subscriber_id are provided a completion
-        subscription is created BEFORE the child is launched so a fast child
-        cannot complete before its listener exists.
-        """
+    def _operation(self, request_id, payload, action):
+        if request_id is None:
+            return action()
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise UsageError("request id must be nonempty")
+        import hashlib
+        path = os.path.join(config.home(), "request-" +
+                            hashlib.sha256(request_id.encode()).hexdigest() + ".json")
+        if os.path.exists(path):
+            with open(path) as handle:
+                prior = json.load(handle)
+            if prior["payload"] != payload:
+                raise UsageError("request id already used with different arguments")
+            if prior["job"] is None:
+                raise UsageError("request launch is ambiguous; reconcile it before retrying")
+            return store.read(prior["job"])
+        state = {"payload": payload, "job": None}
+        store._atomic_write_json(path, state)
+        before = {job['job'] for job in store.list_jobs()}
+        try:
+            result = action()
+        except Exception:
+            # If the operation created its durable job before failing, make the
+            # same id recoverable. Otherwise leave an ambiguous intent and do
+            # not launch it again.
+            candidates = [job for job in store.list_jobs()
+                          if job['job'] not in before and job.get('prompt') == payload.get('prompt')
+                          and job.get('harness') == payload.get('harness')]
+            if len(candidates) == 1:
+                state['job'] = candidates[0]['job']
+                store._atomic_write_json(path, state)
+            raise
+        state["job"] = result["job"]
+        store._atomic_write_json(path, state)
+        return result
+
+    def deliver_session(self, target, prompt, request_id=None):
+        harness, native = notify.parse_target(target)
+        adapter = notify.get(harness)
+        adapter.preflight(native)
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise UsageError("follow-up prompt must not be empty")
+        def deliver():
+            record = store.create(harness, prompt, os.getcwd(), [],
+                                  native_session_id=native, kind="session_delivery")
+            job = record["job"]
+            store.update(job, status=store.RUNNING, started_at=store.now())
+            try:
+                transport_result = adapter.deliver(native, prompt, "followup-" + job)
+            except Exception as exc:
+                store.update(job, status=store.FAILED, error=str(exc),
+                             finished_at=store.now())
+                raise
+            store.write_result(job, "Message accepted by session transport; subsequent agent work is not tracked.")
+            return store.update(job, status=store.SUCCEEDED, finished_at=store.now(),
+                                transport_delivery=transport_result)
+        with self.operation_lock:
+            return self._operation(request_id, {"session": target, "prompt": prompt}, deliver)
+
+    def interrupt_job(self, job_id, prompt, request_id=None):
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise UsageError('correction must not be empty')
+        original = store.read(job_id)
+        if original.get('kind') == 'session_delivery' or not original.get('command'):
+            raise UsageError('interrupt requires an agentctl worker job')
+        if original['harness'] == 'opencode':
+            from .errors import UnsupportedOperationError
+            raise UnsupportedOperationError('interrupt cannot confirm termination of an OpenCode server turn')
+        native = original.get('native_session_id')
+        if not native:
+            raise UsageError('worker has not reported a native session id yet; try again once it has')
+        adapter = children.get(original['harness'])
+        adapter.followup_command(native, original['cwd'], original.get('model'),
+                                 store.result_path(job_id))
+        payload = dict(interrupt_of=job_id, harness=original['harness'], prompt=prompt)
+        def replace():
+            current = store.read(job_id)
+            if store.is_terminal(current):
+                raise UsageError('interrupt requires a running worker; use followup for a finished job')
+            self.cancel_job(job_id)
+            deadline = time.monotonic() + 15
+            while not store.is_terminal(store.read(job_id)):
+                if time.monotonic() >= deadline:
+                    raise UsageError('worker termination was not confirmed; replacement was not launched')
+                time.sleep(.05)
+            pid = current.get('pid')
+            if pid and _pid_alive(pid):
+                raise UsageError('worker process is still alive; replacement was not launched')
+            if pid:
+                try:
+                    os.killpg(pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    os.killpg(pid, signal.SIGKILL)
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            os.killpg(pid, 0)
+                        except ProcessLookupError:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise UsageError('worker process group has not exited; replacement was not launched')
+                        time.sleep(.05)
+            child = self._start_job(original['harness'], prompt, original['cwd'],
+                                    original.get('model'), followup_of=job_id,
+                                    session_id=native, options=original.get('options'))
+            store.update(child['job'], interrupted_job=job_id)
+            store.update(job_id, replacement_job=child['job'])
+            return store.read(child['job'])
+        with self.operation_lock:
+            return self._operation(request_id, payload, replace)
+
+    def _start_job(self, harness, prompt, cwd, model=None, followup_of=None,
+                   session_id=None, options=None, subscriber_harness=None,
+                   subscriber_id=None, require_callback=False):
+        """Create, launch, and begin watching one child run."""
         callback_info = None
         if subscriber_harness and subscriber_id:
             from .sender import preflight_callback
@@ -140,9 +262,16 @@ class Daemon(object):
         elif require_callback:
             raise UsageError("require-callback: caller identity is unknown")
         adapter = children.get(harness)
+        option_args = adapter.option_args({} if options is None else options)
         cwd = os.path.abspath(cwd or os.getcwd())
         if not os.path.isdir(cwd):
             raise UsageError("working directory does not exist: %s" % cwd)
+        if session_id is not None:
+            active = [job['job'] for job in store.list_jobs()
+                      if job.get('native_session_id') == session_id and not store.is_terminal(job)]
+            if active:
+                raise UsageError("native session already has active agentctl jobs: %s" %
+                                 ', '.join(active))
 
         native = session_id
         if native is None:
@@ -167,14 +296,15 @@ class Daemon(object):
             self._set_callback_availability(sub_record["sub"], callback_info)
             sub_record = sessions.read(sub_record["sub"])
 
-        if followup_of:
+        if session_id is not None:
             argv = adapter.followup_command(native, cwd, model,
                                             store.result_path(job_id))
         else:
             argv = adapter.start_command(native, cwd, model,
                                          store.result_path(job_id))
 
-        record = store.update(job_id, command=argv)
+        argv += option_args
+        record = store.update(job_id, command=argv, options={} if options is None else options)
         self._launch(record, prompt)
         result = store.read(job_id)
         if sub_record:
@@ -264,6 +394,7 @@ class Daemon(object):
                 while process.poll() is None:
                     self._refresh_native_identity(job_id)
                     time.sleep(POLL_SECONDS)
+                self._refresh_native_identity(job_id)
                 exit_code = process.wait()
             else:
                 exit_code = self._poll_until_exit(job_id)
@@ -303,6 +434,7 @@ class Daemon(object):
         while pid and _pid_alive(pid):
             if self.stopping.is_set():
                 return None
+            self._refresh_native_identity(job_id)
             time.sleep(POLL_SECONDS)
         # An adopted child's exit status is not available to a non-parent, so
         # the outcome is read from its own output instead.
@@ -900,6 +1032,8 @@ class Daemon(object):
                 adapter = notify.get(record["from_harness"])
                 adapter.validate(record["from_id"])
                 receipt = adapter.deliver(record["from_id"], message, notification)
+            if isinstance(receipt, dict):
+                sessions.update(sub_id, transport_delivery=receipt)
             if isinstance(receipt, dict) and receipt.get("state") == "queued":
                 sessions.set_callback(sub_id, sessions.CB_QUEUED, notification_id=notification)
                 # The receiver may have claimed concurrently before this update.
@@ -1177,7 +1311,7 @@ class Daemon(object):
             try:
                 adapter = notify.get(harness)
                 adapter.validate(target_id)
-                adapter.deliver(target_id, message, notification_id)
+                transport_result = adapter.deliver(target_id, message, notification_id)
             except AgentctlError as exc:
                 log("delivery failed for %s -> %s:%s: %s"
                     % (job_id, harness, target_id, exc.message))
@@ -1196,7 +1330,7 @@ class Daemon(object):
                     event=event)
                 return
             store.set_delivery(job_id, wait_id, store.DELIVERED,
-                               notification_id=notification_id, event=event)
+                               notification_id=notification_id, event=event, result=transport_result)
             log("delivered %s for %s to %s:%s"
                 % (notification_id, job_id, harness, target_id))
         finally:
@@ -1333,6 +1467,11 @@ class Daemon(object):
                         delivery.get("state") == store.DELIVERY_PENDING and delivery.get("notification_id")):
                     store.set_delivery(record["job"], wait["wait"], store.DELIVERY_UNKNOWN,
                                        error="daemon stopped during callback; acceptance unknown")
+            if record.get("kind") == "session_delivery" and not store.is_terminal(record):
+                store.update(record["job"], status=store.FAILED,
+                             error="session delivery interrupted; acceptance unknown; not retried",
+                             finished_at=store.now())
+                continue
             if store.is_terminal(record):
                 # Deliver anything that was claimed but never sent.
                 self._deliver_all(record["job"])

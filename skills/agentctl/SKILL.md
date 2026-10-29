@@ -58,7 +58,8 @@ have inherited caller identity removed.
 
 ### Codex caller
 
-Codex queues completion into the existing chat. Queued messages arrive after
+Codex tries Desktop IPC steering into an active turn, with queue fallback.
+Queued messages arrive after
 the current turn ends. Register the callback, then end your turn.
 
 ```sh
@@ -128,3 +129,6 @@ Codex callback route verification remains independent of completion detection.
 For transport limitations, recovery states, configuration, and exit codes,
 read [README.md](../../README.md). Results remain readable after failed or
 unknown callbacks; no automatic retry occurs.
+
+For backlog pipelines with stage routing and multiple workers, use
+[agentctl-team](../agentctl-team/SKILL.md).

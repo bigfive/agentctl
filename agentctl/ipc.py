@@ -18,13 +18,13 @@ import threading
 import time
 
 from . import config, store
-from .errors import AgentctlError, DaemonUnavailableError
+from .errors import AgentctlError, DaemonUnavailableError, UsageError
 
 CONNECT_TIMEOUT = 5
 CALL_TIMEOUT = 300
 START_TIMEOUT = 20
-PROTOCOL_VERSION = 3
-PROTOCOL_OPS = {"start", "send_session", "resume_external", "sub_create",
+PROTOCOL_VERSION = 4
+PROTOCOL_OPS = {"notify", "interrupt", "start", "send_session", "resume_external", "sub_create",
                 "sub_read", "sub_list", "listeners", "hook_event", "inbox_list", "inbox_claim"}
 
 
@@ -118,7 +118,7 @@ def dispatch(daemon, request):
             return {"ok": True, "data": daemon.reindex_sessions(
                 include_tools=request.get("include_tools", False))}
         if op == "ping":
-            return {"ok": True, "data": {"pid": os.getpid(), "protocol": PROTOCOL_VERSION}}
+            return {"ok": True, "data": {"pid": os.getpid(), "protocol": PROTOCOL_VERSION, "worker_options": True}}
         if op == "start":
             record = daemon.start_job(
                 request["harness"], request.get("prompt") or "",
@@ -126,21 +126,30 @@ def dispatch(daemon, request):
                 subscriber_harness=request.get("subscriber_harness"),
                 subscriber_id=request.get("subscriber_id"),
                 require_callback=request.get("require_callback", False),
+                request_id=request.get("request_id"), options=request.get("options"),
             )
             return {"ok": True, "data": record}
         if op == "followup":
             record = store.read(request["job"])
+            if not store.is_terminal(record):
+                raise UsageError("cannot follow up an active job")
             native = record.get("native_session_id")
             if not native:
                 from .errors import UnsupportedOperationError
-                raise UnsupportedOperationError(
-                    "job %s has no native session id, so it cannot take a "
-                    "follow-up" % record["job"])
+                raise UnsupportedOperationError("job has no native session id")
             child = daemon.start_job(
-                record["harness"], request.get("prompt") or "",
-                record["cwd"], record.get("model"),
-                followup_of=record["job"], session_id=native)
+                record["harness"], request["prompt"], record["cwd"],
+                record.get("model"), followup_of=record["job"],
+                session_id=native, request_id=request.get("request_id"),
+                options=request["options"] if "options" in request else record.get("options"))
             return {"ok": True, "data": child}
+        if op == "interrupt":
+            return {"ok": True, "data": daemon.interrupt_job(
+                request["job"], request["prompt"], request.get("request_id"))}
+        if op == "notify":
+            delivery = daemon.deliver_session(request["target"], request["message"],
+                                               request.get("request_id"))
+            return {"ok": True, "data": delivery}
         if op == "asyncwait":
             wait = daemon.register_wait(request["job"], request["notify"],
                                         request.get("timeout"))

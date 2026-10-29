@@ -4,6 +4,9 @@ Discover local agent sessions, start work, address existing sessions, and observ
 completion across Codex, Claude Code, Cursor, and OpenCode. Python 3; standard
 library only.
 
+For configurable multi-worker backlogs, see [agentctl-team](TEAM.md) and
+[the getting-started guide](docs/agentctl-team-getting-started.md).
+
 ## Install and upgrade
 
 ```sh
@@ -194,7 +197,10 @@ agentctl list
 agentctl read <job> --stream
 ```
 
-A Codex queued notification arrives when the current turn ends. Register the
+Codex UUID targets first use Desktop IPC steering for an active turn, then
+fall back to CLI queue delivery for idle turns or steering errors. Transport
+results retain steering warnings; a lost steering response followed by queue
+delivery can duplicate a message. A queued notification arrives when the current turn ends. Register the
 callback and end the turn to receive it. From a client without a usable callback
 route, use `wait` or read the persisted result.
 

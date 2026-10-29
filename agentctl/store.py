@@ -89,7 +89,7 @@ def lock_for(job_id):
 
 
 def create(harness, prompt, cwd, command, model=None, followup_of=None,
-           native_session_id=None):
+           native_session_id=None, kind=None):
     """Create a new job record in ``pending`` and return it."""
     job_id = ids.new_job_id()
     os.makedirs(config.job_dir(job_id), exist_ok=True)
@@ -115,6 +115,8 @@ def create(harness, prompt, cwd, command, model=None, followup_of=None,
         "stderr": stderr_path(job_id),
         "result": result_path(job_id),
     }
+    if kind is not None:
+        record["kind"] = kind
     with lock_for(job_id):
         _atomic_write_json(record_path(job_id), record)
     return record
@@ -191,7 +193,7 @@ def add_wait(job_id, target_harness, target_id, raw_target, timeout=None):
 
 
 def set_delivery(job_id, wait_id, state, notification_id=None, error=None,
-                 event=None):
+                 event=None, result=None):
     def mutator(record):
         for wait in record["waits"]:
             if wait["wait"] != wait_id:
@@ -204,6 +206,8 @@ def set_delivery(job_id, wait_id, state, notification_id=None, error=None,
             if event:
                 delivery["event"] = event
             delivery["error"] = error
+            if result is not None:
+                delivery["result"] = result
             if state == DELIVERED:
                 delivery["delivered_at"] = now()
 

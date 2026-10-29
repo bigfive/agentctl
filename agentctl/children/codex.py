@@ -33,13 +33,33 @@ class CodexChild(ChildAdapter):
         return self._base(cwd, model, result_file)
 
     def followup_command(self, session_id, cwd, model, result_file):
-        argv = [config.resolve_binary("codex"), "exec", "resume", session_id,
-                "--json", "--skip-git-repo-check", "--color", "never",
-                "-o", result_file, "-C", cwd]
+        argv = [config.resolve_binary("codex"), "exec", "resume", session_id, "-",
+                "--json", "--skip-git-repo-check",
+                "-o", result_file]
         argv += PERMISSIVE
         if model:
             argv += ["-m", model]
         return argv
+
+    def option_args(self, options):
+        import json
+        from ..errors import UsageError
+        if not isinstance(options, dict):
+            raise UsageError('worker options must be a JSON object')
+        allowed = {
+            'reasoning_effort': ('model_reasoning_effort',
+                                 {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'}),
+            'service_tier': ('service_tier', {'auto', 'default', 'flex', 'priority'}),
+        }
+        args = []
+        for key, value in sorted(options.items()):
+            if key not in allowed:
+                raise UsageError('unsupported Codex worker option: ' + key)
+            native, choices = allowed[key]
+            if not isinstance(value, str) or value not in choices:
+                raise UsageError('invalid ' + key + '; expected one of: ' + ', '.join(sorted(choices)))
+            args += ['-c', native + '=' + json.dumps(value)]
+        return args
 
     def read_event(self, event):
         kind = event.get("type")
